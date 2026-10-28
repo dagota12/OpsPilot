@@ -3,6 +3,8 @@ import { InvestigationEngine } from '../core/engine/investigation-engine.js';
 import { ToolRegistry } from '../core/tools/registry.js';
 import { ToolPolicy } from '../core/policy/policy.js';
 import { MockAIProvider } from '../core/providers/mock.js';
+import { GeminiProvider } from '../providers/gemini.js';
+import type { AIProvider } from '../core/providers/interface.js';
 import { MockDiagnosticBackend, MOCK_SCENARIOS } from '../diagnostics/mock.js';
 import { createStandardTools } from '../diagnostics/tools.js';
 
@@ -12,13 +14,15 @@ export function registerInvestigateCommand(program: Command): void {
     .description('Investigate an infrastructure incident using diagnostic evidence')
     .argument('<prompt>', 'Incident description (e.g. "Why is auth-service restarting?")')
     .option('-n, --namespace <namespace>', 'Target Kubernetes namespace', 'default')
+    .option('-p, --provider <provider>', 'AI provider to use (mock | gemini)', 'mock')
+    .option('-m, --model <model>', 'Gemini model name (e.g. gemini-2.5-flash)', 'gemini-2.5-flash')
     .option(
       '-s, --scenario <scenario>',
       'Mock incident scenario (crashloop-missing-env | oom-killed | failed-readiness-probe)',
       'crashloop-missing-env'
     )
     .option('--max-tools <count>', 'Maximum tool-call budget', '10')
-    .action(async (prompt: string, options: { namespace: string; scenario: string; maxTools: string }) => {
+    .action(async (prompt: string, options: { namespace: string; scenario: string; maxTools: string; provider: string; model: string }) => {
       const scenarioKey = options.scenario as keyof typeof MOCK_SCENARIOS;
       if (!MOCK_SCENARIOS[scenarioKey]) {
         console.error(`Error: Unknown scenario '${options.scenario}'. Available: ${Object.keys(MOCK_SCENARIOS).join(', ')}`);
@@ -29,6 +33,10 @@ export function registerInvestigateCommand(program: Command): void {
       console.log(`  OpsPilot Incident Investigation`);
       console.log(`======================================================`);
       console.log(`Prompt:       "${prompt}"`);
+      console.log(`Provider:     ${options.provider}`);
+      if (options.provider === 'gemini') {
+        console.log(`Model:        ${options.model}`);
+      }
       console.log(`Namespace:    ${options.namespace}`);
       console.log(`Scenario:     ${scenarioKey}`);
       console.log(`Tool Budget:  ${options.maxTools}`);
@@ -42,7 +50,19 @@ export function registerInvestigateCommand(program: Command): void {
       }
 
       const policy = new ToolPolicy(registry);
-      const provider = new MockAIProvider({ scenarioId: scenarioKey });
+
+      let provider: AIProvider;
+      if (options.provider === 'gemini') {
+        try {
+          provider = new GeminiProvider({ model: options.model });
+        } catch (err: any) {
+          console.error(`Configuration Error: ${err.message}`);
+          process.exit(1);
+        }
+      } else {
+        provider = new MockAIProvider({ scenarioId: scenarioKey });
+      }
+
       const engine = new InvestigationEngine({ provider, registry, policy });
 
       console.log(`[1/3] Initializing diagnostic tools & policy guards...`);

@@ -7,39 +7,70 @@ Local-first AI DevOps incident investigation CLI.
 - **Package Manager:** [Bun](https://bun.sh/) `v1.3+` (`bun install`, `bun.lock`)
 - **Runtime Environment:** [Node.js](https://nodejs.org/) `v20+` or `v24+` (Required for native C++ N-API modules like `better-sqlite3`)
 
-## Architecture & Design (Milestone 1)
+## Architecture (Clean / Hexagonal)
 
-OpsPilot adopts Hexagonal / Clean Architecture to decouple the investigation core from any specific AI provider, presentation layer, or Kubernetes backend:
+OpsPilot decouples the investigation core from any specific AI provider, presentation layer, or Kubernetes backend:
 
 - `src/core/models/`: Domain models (`IncidentReport`, `Evidence`, `Fact`, `Hypothesis`, `InvestigationRun`).
 - `src/core/tools/`: Tool definition, execution contexts, and registry enforcing read-only constraints.
 - `src/core/policy/`: Safety policy enforcing read-only verification, Zod schema validation, namespace allowlists, and output truncation limits.
-- `src/core/providers/`: Normalized `AIProvider` contract and deterministic `MockAIProvider`.
+- `src/core/providers/`: Normalized `AIProvider` contract, deterministic `MockAIProvider`, and `GeminiProvider` adapter.
+- `src/providers/gemini.ts`: Google Gemini Adapter using `@google/genai` (maps Gemini function calling to the normalized `AIProvider` contract).
 - `src/diagnostics/`: `DiagnosticBackend` interface, 3 representative mock scenarios (`crashloop-missing-env`, `oom-killed`, `failed-readiness-probe`), and 5 standard read-only diagnostic tools.
-- `src/core/engine/`: Bounded investigation loop with tool-call budgets, per-tool timeouts, and explicit termination states.
+- `src/core/engine/`: Bounded investigation loop with tool-call budgets, per-tool timeouts, cooperative cancellation, and explicit termination states.
 - `src/cli/`: Command-line interface with structured terminal reporting.
 
 ## Running Tests
 
-Execute the full Vitest suite (all 9 multi-step scenario and safety tests):
+Execute the full Vitest suite (21 automated tests covering engine loop, policy rules, timeouts, cancellation, evidence checks, and mocked Gemini adapter):
 
 ```bash
-bun run test
-# or
-bunx vitest run
+bun run typecheck && bun run test
 ```
 
-## Running the Demo CLI
+> **Note:** Tests use mocked API responses. No API key or network access is required to run the test suite.
 
-Run an end-to-end investigation against the mock cluster environment:
+## Gemini Provider Setup
+
+To run live investigations with Google Gemini:
+
+1. Obtain a Gemini API key from Google AI Studio.
+2. Export the key in your shell:
+
+```bash
+export GEMINI_API_KEY="AIzaSy..."
+```
+
+3. Run an investigation specifying `--provider gemini`:
+
+```bash
+# CrashLoopBackOff scenario
+npx tsx src/index.ts investigate "Why is auth-service restarting?" --provider gemini --scenario crashloop-missing-env
+
+# OOMKilled scenario
+npx tsx src/index.ts investigate "Why did image-processor terminate?" --provider gemini --scenario oom-killed
+
+# Failed readiness probe scenario
+npx tsx src/index.ts investigate "Why is payment-gateway 0/1 ready?" --provider gemini --scenario failed-readiness-probe
+```
+
+Optionally specify a custom model name with `-m` or `--model` (defaults to `gemini-2.5-flash`):
+
+```bash
+npx tsx src/index.ts investigate "Why is auth-service restarting?" --provider gemini --model gemini-2.5-pro --scenario crashloop-missing-env
+```
+
+## Running the Mock Demo
+
+Run an end-to-end investigation against the mock cluster environment without an API key:
 
 ```bash
 bun run demo
 # or
-npx tsx src/index.ts investigate "Why is auth-service restarting?" --scenario crashloop-missing-env
+npx tsx src/index.ts investigate "Why is auth-service restarting?" --provider mock --scenario crashloop-missing-env
 ```
 
-Available scenarios:
+Available mock scenarios:
 1. `crashloop-missing-env`: Pod in CrashLoopBackOff due to undefined `JWT_SECRET_KEY`.
 2. `oom-killed`: Container terminated with exit code 137 (`OOMKilled`) exceeding 512Mi memory limit.
 3. `failed-readiness-probe`: Pod unready (0/1 Ready) due to readiness probe HTTP 500 when database connection fails.
