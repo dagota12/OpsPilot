@@ -94,7 +94,7 @@ Distinguish clearly between observed facts, hypotheses, and recommendations.`,
 
         // If provider returned a final report or concluded
         if (aiResponse.report) {
-          finalReport = aiResponse.report;
+          finalReport = this.validateReportEvidence(aiResponse.report, evidenceList);
           status = 'COMPLETED';
           terminationReason = 'Investigation concluded with final incident report';
           addAudit('STATUS_CHANGE', { status, terminationReason, reportId: finalReport.id });
@@ -177,7 +177,7 @@ Distinguish clearly between observed facts, hypotheses, and recommendations.`,
             continue;
           }
 
-          // Execute tool with timeout
+          // Execute tool with timeout and cooperative cancellation
           const tool = policyCheck.tool!;
           const validatedParams = policyCheck.validatedParams;
 
@@ -185,14 +185,28 @@ Distinguish clearly between observed facts, hypotheses, and recommendations.`,
           let toolError: string | undefined;
           let isError = false;
 
+          const toolAbortController = new AbortController();
+          const onParentAbort = () => toolAbortController.abort();
+          if (abortSignal) {
+            if (abortSignal.aborted) {
+              toolAbortController.abort();
+            } else {
+              abortSignal.addEventListener('abort', onParentAbort, { once: true });
+            }
+          }
+
+          let timeoutId: NodeJS.Timeout | undefined;
           try {
-            const timeoutPromise = new Promise<never>((_, reject) =>
-              setTimeout(() => reject(new Error(`Tool '${toolCall.name}' timed out after ${perToolTimeoutMs}ms`)), perToolTimeoutMs)
-            );
+            const timeoutPromise = new Promise<never>((_, reject) => {
+              timeoutId = setTimeout(() => {
+                toolAbortController.abort(); // Signal tool to cancel underlying work
+                reject(new Error(`Tool '${toolCall.name}' timed out after ${perToolTimeoutMs}ms`));
+              }, perToolTimeoutMs);
+            });
 
             const executionPromise = tool.execute(validatedParams, {
               namespace: validatedParams.namespace,
-              abortSignal,
+              abortSignal: toolAbortController.signal,
             });
 
             const result = await Promise.race([executionPromise, timeoutPromise]);
@@ -215,6 +229,13 @@ Distinguish clearly between observed facts, hypotheses, and recommendations.`,
           } catch (err: any) {
             isError = true;
             toolError = err.message || String(err);
+          } finally {
+            if (timeoutId) {
+              clearTimeout(timeoutId);
+            }
+            if (abortSignal) {
+              abortSignal.removeEventListener('abort', onParentAbort);
+            }
           }
 
           addAudit('TOOL_RESULT', {
@@ -234,9 +255,15 @@ Distinguish clearly between observed facts, hypotheses, and recommendations.`,
         }
       }
     } catch (err: any) {
-      status = 'FAILED';
-      terminationReason = err.message || String(err);
-      addAudit('ERROR', { error: terminationReason });
+      if (abortSignal?.aborted || err.message?.includes('aborted')) {
+        status = 'CANCELLED';
+        terminationReason = 'Investigation cancelled by user';
+        addAudit('STATUS_CHANGE', { status, terminationReason });
+      } else {
+        status = 'FAILED';
+        terminationReason = err.message || String(err);
+        addAudit('ERROR', { error: terminationReason });
+      }
     }
 
     const completedAt = Date.now();
@@ -252,6 +279,38 @@ Distinguish clearly between observed facts, hypotheses, and recommendations.`,
       evidence: evidenceList,
       report: finalReport,
       auditLog,
+    };
+  }
+
+  private validateReportEvidence(report: IncidentReport, evidenceList: Evidence[]): IncidentReport {
+    const validEvidenceIds = new Set(evidenceList.map((e) => e.id));
+    const unsupportedFacts: string[] = [];
+
+    const validatedFacts = report.observedFacts.map((fact) => {
+      const validRefs = fact.evidenceRef.filter((ref) => validEvidenceIds.has(ref));
+      if (validRefs.length === 0 && fact.evidenceRef.length > 0) {
+        unsupportedFacts.push(fact.statement);
+      }
+      return {
+        ...fact,
+        evidenceRef: validRefs,
+      };
+    });
+
+    let uncertaintyNotes = report.uncertaintyNotes;
+    let confidence = report.confidence;
+
+    if (unsupportedFacts.length > 0) {
+      const note = `Warning: ${unsupportedFacts.length} observed fact(s) referenced invalid or nonexistent evidence IDs and were unlinked.`;
+      uncertaintyNotes = uncertaintyNotes ? `${uncertaintyNotes} | ${note}` : note;
+      confidence = 'low';
+    }
+
+    return {
+      ...report,
+      observedFacts: validatedFacts,
+      confidence,
+      uncertaintyNotes,
     };
   }
 }

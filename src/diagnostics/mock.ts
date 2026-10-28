@@ -18,7 +18,9 @@ export interface MockClusterScenario {
   resourceUsage: Record<string, unknown>;
 }
 
-export const MOCK_SCENARIOS: Record<string, MockClusterScenario> = {
+export type ScenarioId = 'crashloop-missing-env' | 'oom-killed' | 'failed-readiness-probe';
+
+export const MOCK_SCENARIOS: Record<ScenarioId, MockClusterScenario> = {
   'crashloop-missing-env': {
     id: 'crashloop-missing-env',
     name: 'CrashLoopBackOff due to missing environment variable',

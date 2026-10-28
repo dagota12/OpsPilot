@@ -260,4 +260,135 @@ describe('OpsPilot InvestigationEngine (Milestone 1)', () => {
       "OpsPilot only permits read-only tools"
     );
   });
+
+  it('regression: transitions to CANCELLED when abortSignal is triggered', async () => {
+    const abortController = new AbortController();
+    abortController.abort(); // Cancel before or at start
+
+    const engine = new InvestigationEngine({ provider, registry, policy });
+    const run = await engine.investigate('Why is it broken?', {}, abortController.signal);
+
+    expect(run.status).toBe('CANCELLED');
+    expect(run.terminationReason).toContain('cancelled by user');
+  });
+
+  it('regression: transitions to FAILED when AI provider throws an unhandled error', async () => {
+    const failingProvider = {
+      id: 'failing',
+      async chat() {
+        throw new Error('Rate limit exceeded: 429 Too Many Requests');
+      },
+    };
+
+    const engine = new InvestigationEngine({ provider: failingProvider as any, registry, policy });
+    const run = await engine.investigate('Why is it broken?');
+
+    expect(run.status).toBe('FAILED');
+    expect(run.terminationReason).toContain('Rate limit exceeded: 429');
+    const errAudit = run.auditLog.find((a) => a.type === 'ERROR');
+    expect(errAudit?.details['error']).toContain('Rate limit exceeded: 429');
+  });
+
+  it('regression: ensures tool timeout explicitly signals AbortSignal to underlying tool execution', async () => {
+    let receivedSignalAborted = false;
+
+    const cooperativeHangingTool: DiagnosticTool<{ namespace: string }> = {
+      definition: {
+        name: 'cooperative_hanging_tool',
+        description: 'Simulates a tool that listens to its abortSignal',
+        parameters: z.object({ namespace: z.string() }),
+      },
+      isReadOnly: true,
+      async execute(params, context) {
+        return new Promise((resolve) => {
+          context.abortSignal?.addEventListener('abort', () => {
+            receivedSignalAborted = true;
+            resolve({ success: false, error: 'Cancelled by timeout signal', executionTimeMs: 30 });
+          });
+        });
+      },
+    };
+    registry.register(cooperativeHangingTool);
+
+    provider.setScriptedResponses([
+      {
+        toolCalls: [
+          {
+            id: 'call_hang_coop',
+            name: 'cooperative_hanging_tool',
+            arguments: { namespace: 'default' },
+          },
+        ],
+      },
+      {
+        report: {
+          id: 'rep_timeout_handled',
+          summary: 'Tool timed out safely.',
+          observedFacts: [],
+          hypotheses: [],
+          recommendations: [],
+          confidence: 'low',
+        },
+      },
+    ]);
+
+    const engine = new InvestigationEngine({ provider, registry, policy });
+    const run = await engine.investigate('Test cooperative timeout', {
+      perToolTimeoutMs: 30,
+    });
+
+    expect(run.status).toBe('COMPLETED');
+    expect(receivedSignalAborted).toBe(true); // Verifies underlying work was actually signalled to abort!
+  });
+
+  it('regression: validates and unlinks unsupported evidence references in report', async () => {
+    provider.setScriptedResponses([
+      {
+        content: 'Investigating pod...',
+        toolCalls: [
+          {
+            id: 'real_call_1',
+            name: 'get_pod_status',
+            arguments: { namespace: 'default', podName: 'auth-service' },
+          },
+        ],
+      },
+      {
+        report: {
+          id: 'rep_hallucinated',
+          summary: 'Fabricated diagnosis with invalid evidence IDs.',
+          observedFacts: [
+            {
+              id: 'f1',
+              statement: 'Fact backed by real tool call.',
+              evidenceRef: ['real_call_1'],
+            },
+            {
+              id: 'f2',
+              statement: 'Hallucinated fact referencing nonexistent tool call ID.',
+              evidenceRef: ['fake_call_999'],
+            },
+          ],
+          hypotheses: [],
+          recommendations: [],
+          confidence: 'high',
+        },
+      },
+    ]);
+
+    const engine = new InvestigationEngine({ provider, registry, policy });
+    const run = await engine.investigate('Check integrity');
+
+    expect(run.status).toBe('COMPLETED');
+    expect(run.report).toBeDefined();
+
+    // The real fact preserves evidence reference
+    expect(run.report?.observedFacts[0]?.evidenceRef).toEqual(['real_call_1']);
+
+    // The hallucinated fact has fake reference stripped and is flagged in uncertainty notes
+    expect(run.report?.observedFacts[1]?.evidenceRef).toEqual([]);
+    expect(run.report?.confidence).toBe('low'); // Downgraded from 'high'
+    expect(run.report?.uncertaintyNotes).toContain('invalid or nonexistent evidence IDs');
+  });
 });
+
