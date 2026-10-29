@@ -3,6 +3,14 @@ try {
   process.loadEnvFile?.();
 } catch {}
 
+if (typeof (process.versions as any).bun !== 'undefined') {
+  console.warn(
+    '\x1b[33m[OpsPilot Notice]\x1b[0m You are running with the Bun runtime.\n' +
+    'Local Kubernetes clusters (Kind/Minikube) require mTLS client certificate support.\n' +
+    'Run with Node.js via tsx: \x1b[36mnpx tsx src/index.ts\x1b[0m or \x1b[36mbun start\x1b[0m\n'
+  );
+}
+
 import { Command } from 'commander';
 import { registerInvestigateCommand } from './cli/investigate.js';
 import { registerInteractiveCommand, runInteractiveSession } from './cli/interactive.js';
