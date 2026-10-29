@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { z } from 'zod';
-import { GeminiProvider, extractReportFromText } from '../src/providers/gemini.js';
+import { GeminiProvider, extractReportFromText, cleanSchemaForGemini } from '../src/providers/gemini.js';
 import type { ToolDefinition } from '../src/core/tools/types.js';
 
 describe('GeminiProvider Adapter', () => {
@@ -12,6 +12,30 @@ describe('GeminiProvider Adapter', () => {
       podName: z.string().optional(),
     }),
   };
+
+  it('sanitizes tool schema recursively removing exclusiveMinimum, default, and unhandled keywords', () => {
+    const rawSchema = {
+      $schema: 'https://json-schema.org/draft/2020-12/schema',
+      type: 'object',
+      properties: {
+        namespace: { type: 'string', minLength: 1 },
+        tailLines: { default: 100, type: 'integer', exclusiveMinimum: 0, maximum: 1000 },
+      },
+      required: ['namespace'],
+      additionalProperties: false,
+    };
+
+    const cleaned = cleanSchemaForGemini(rawSchema);
+
+    expect(cleaned.$schema).toBeUndefined();
+    expect(cleaned.additionalProperties).toBeUndefined();
+    expect(cleaned.properties.tailLines.exclusiveMinimum).toBeUndefined();
+    expect(cleaned.properties.tailLines.maximum).toBeUndefined();
+    expect(cleaned.properties.tailLines.default).toBeUndefined();
+    expect(cleaned.properties.tailLines.type).toBe('integer');
+    expect(cleaned.properties.namespace.minLength).toBeUndefined();
+    expect(cleaned.properties.namespace.type).toBe('string');
+  });
 
   it('throws a helpful configuration error if no API key is provided', () => {
     const originalEnv = process.env;

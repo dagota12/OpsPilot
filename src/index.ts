@@ -1,4 +1,8 @@
 #!/usr/bin/env node
+try {
+  process.loadEnvFile?.();
+} catch {}
+
 import { Command } from 'commander';
 import { registerInvestigateCommand } from './cli/investigate.js';
 

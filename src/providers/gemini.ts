@@ -20,10 +20,15 @@ export class GeminiProvider implements AIProvider {
   readonly id = 'gemini';
   private client: any;
   private model: string;
+  private signatureCache = new Map<string, string>();
 
   constructor(options: GeminiProviderOptions = {}) {
+    try {
+      process.loadEnvFile?.();
+    } catch {}
+
     const apiKey = options.apiKey || process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
-    this.model = options.model || process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+    this.model = options.model || process.env.GEMINI_MODEL || 'gemini-3.8-flash';
 
     if (options.client) {
       this.client = options.client;
@@ -55,7 +60,7 @@ export class GeminiProvider implements AIProvider {
 When you have collected sufficient evidence and are ready to conclude the investigation, provide your final report as a valid JSON object in a \`\`\`json ... \`\`\` code block matching this schema:
 {
   "summary": "Clear summary of the incident",
-  "observedFacts": [{ "id": "fact_1", "statement": "Fact description", "evidenceRef": ["call_id"] }],
+  "observedFacts": [{ "id": "fact_1", "statement": "Fact description", "evidenceRef": ["tool_name"] }],
   "hypotheses": [{ "id": "hypo_1", "statement": "Hypothesis description", "likelihood": "high"|"medium"|"low", "reasoning": "Explanation" }],
   "recommendations": ["Actionable next steps for the operator"],
   "confidence": "high"|"medium"|"low",
@@ -118,6 +123,7 @@ When you have collected sufficient evidence and are ready to conclude the invest
           role: 'user',
           parts: [{ text: msg.content }],
         });
+        
       } else if (msg.role === 'assistant') {
         const parts: any[] = [];
         if (msg.content) {
@@ -125,12 +131,21 @@ When you have collected sufficient evidence and are ready to conclude the invest
         }
         if (msg.toolCalls && msg.toolCalls.length > 0) {
           for (const tc of msg.toolCalls) {
-            parts.push({
+            const signature =
+              (tc.metadata?.thoughtSignature as string | undefined) ||
+              this.signatureCache.get(tc.id) ||
+              this.signatureCache.get(tc.name);
+
+            const part: any = {
               functionCall: {
                 name: tc.name,
                 args: tc.arguments,
               },
-            });
+            };
+            if (signature) {
+              part.thoughtSignature = signature;
+            }
+            parts.push(part);
           }
         }
         contents.push({
@@ -173,8 +188,7 @@ When you have collected sufficient evidence and are ready to conclude the invest
   private convertTools(tools: ToolDefinition[]): Array<{ name: string; description: string; parameters: any }> {
     return tools.map((tool) => {
       const rawSchema = z.toJSONSchema(tool.parameters) as Record<string, any>;
-      // Strip JSON-schema spec metadata not supported by Gemini's OpenAPI-subset schema parser
-      const { $schema, additionalProperties, ...cleanSchema } = rawSchema;
+      const cleanSchema = cleanSchemaForGemini(rawSchema);
 
       return {
         name: tool.name,
@@ -196,10 +210,22 @@ When you have collected sufficient evidence and are ready to conclude the invest
         textContent += part.text;
       }
       if (part.functionCall) {
+        const id =
+          part.functionCall.id ||
+          `call_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+
+        if (part.thoughtSignature) {
+          this.signatureCache.set(id, part.thoughtSignature);
+          this.signatureCache.set(part.functionCall.name, part.thoughtSignature);
+        }
+
         toolCalls.push({
-          id: part.functionCall.id || `call_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+          id,
           name: part.functionCall.name,
           arguments: part.functionCall.args || {},
+          metadata: part.thoughtSignature
+            ? { thoughtSignature: part.thoughtSignature }
+            : undefined,
         });
       }
     }
@@ -261,4 +287,47 @@ export function extractReportFromText(text: string): IncidentReport | undefined 
   }
 
   return undefined;
+}
+
+export function cleanSchemaForGemini(schema: any): any {
+  if (!schema || typeof schema !== 'object') {
+    return schema;
+  }
+
+  if (Array.isArray(schema)) {
+    return schema.map(cleanSchemaForGemini);
+  }
+
+  const allowedFields = new Set([
+    'type',
+    'format',
+    'description',
+    'nullable',
+    'enum',
+    'properties',
+    'required',
+    'items',
+  ]);
+
+  const cleaned: Record<string, any> = {};
+
+  for (const [key, value] of Object.entries(schema)) {
+    if (!allowedFields.has(key)) {
+      continue;
+    }
+
+    if (key === 'properties' && value && typeof value === 'object' && !Array.isArray(value)) {
+      const cleanedProperties: Record<string, any> = {};
+      for (const [propName, propSchema] of Object.entries(value)) {
+        cleanedProperties[propName] = cleanSchemaForGemini(propSchema);
+      }
+      cleaned[key] = cleanedProperties;
+    } else if (key === 'items') {
+      cleaned[key] = cleanSchemaForGemini(value);
+    } else {
+      cleaned[key] = value;
+    }
+  }
+
+  return cleaned;
 }

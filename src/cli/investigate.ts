@@ -15,7 +15,7 @@ export function registerInvestigateCommand(program: Command): void {
     .argument('<prompt>', 'Incident description (e.g. "Why is auth-service restarting?")')
     .option('-n, --namespace <namespace>', 'Target Kubernetes namespace', 'default')
     .option('-p, --provider <provider>', 'AI provider to use (mock | gemini)', 'mock')
-    .option('-m, --model <model>', 'Gemini model name (e.g. gemini-2.5-flash)', 'gemini-2.5-flash')
+    .option('-m, --model <model>', 'Gemini model name (e.g. gemini-3.5-flash)', 'gemini-3.5-flash')
     .option(
       '-s, --scenario <scenario>',
       'Mock incident scenario (crashloop-missing-env | oom-killed | failed-readiness-probe)',

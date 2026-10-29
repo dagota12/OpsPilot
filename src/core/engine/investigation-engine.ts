@@ -283,7 +283,11 @@ Distinguish clearly between observed facts, hypotheses, and recommendations.`,
   }
 
   private validateReportEvidence(report: IncidentReport, evidenceList: Evidence[]): IncidentReport {
-    const validEvidenceIds = new Set(evidenceList.map((e) => e.id));
+    const validEvidenceIds = new Set<string>();
+    for (const e of evidenceList) {
+      validEvidenceIds.add(e.id);
+      validEvidenceIds.add(e.toolName);
+    }
     const unsupportedFacts: string[] = [];
 
     const validatedFacts = report.observedFacts.map((fact) => {

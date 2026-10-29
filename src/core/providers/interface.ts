@@ -21,6 +21,7 @@ export interface ToolCallRequest {
   id: string;
   name: string;
   arguments: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
 }
 
 export interface AssistantMessage extends BaseMessage {
