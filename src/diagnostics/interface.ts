@@ -44,6 +44,16 @@ export interface NodeEventsParams {
   limit?: number;
 }
 
+export interface ServiceStatusParams {
+  namespace: string;
+  serviceName?: string;
+}
+
+export interface EndpointsStatusParams {
+  namespace: string;
+  serviceName?: string;
+}
+
 export interface DiagnosticBackend {
   getDeploymentStatus(params: DeploymentStatusParams): Promise<unknown>;
   getPodStatus(params: PodStatusParams): Promise<unknown>;
@@ -53,4 +63,7 @@ export interface DiagnosticBackend {
   getWorkloadConfig(params: WorkloadConfigParams): Promise<unknown>;
   getNodeStatus(params: NodeStatusParams): Promise<unknown>;
   getNodeEvents(params: NodeEventsParams): Promise<unknown>;
+  getServiceStatus(params: ServiceStatusParams): Promise<unknown>;
+  getEndpointsStatus(params: EndpointsStatusParams): Promise<unknown>;
 }
+

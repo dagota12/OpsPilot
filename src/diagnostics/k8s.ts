@@ -14,6 +14,8 @@ import type {
   WorkloadConfigParams,
   NodeStatusParams,
   NodeEventsParams,
+  ServiceStatusParams,
+  EndpointsStatusParams,
 } from './interface.js';
 
 export interface K8sBackendOptions {
@@ -529,4 +531,161 @@ export class K8sDiagnosticBackend implements DiagnosticBackend {
       throw new Error(`Failed to query node events: ${err.body?.message || err.message || err}`);
     }
   }
+
+  async getServiceStatus(params: ServiceStatusParams): Promise<unknown> {
+    try {
+      let rawServices: any[] = [];
+      if (params.serviceName) {
+        try {
+          const svc = await this.coreApi.readNamespacedService({
+            name: params.serviceName,
+            namespace: params.namespace,
+          });
+          rawServices = [svc];
+        } catch {
+          const list = await this.coreApi.listNamespacedService({
+            namespace: params.namespace,
+          });
+          rawServices = (list.items || []).filter((s: any) =>
+            s.metadata?.name?.includes(params.serviceName!)
+          );
+        }
+      } else {
+        const list = await this.coreApi.listNamespacedService({
+          namespace: params.namespace,
+        });
+        rawServices = list.items || [];
+      }
+
+      if (rawServices.length === 0) {
+        throw new Error(
+          params.serviceName
+            ? `Service '${params.serviceName}' not found in namespace '${params.namespace}'`
+            : `No services found in namespace '${params.namespace}'`
+        );
+      }
+
+      const services = rawServices.map((s: any) => ({
+        name: s.metadata?.name,
+        namespace: s.metadata?.namespace,
+        type: s.spec?.type || 'ClusterIP',
+        clusterIP: s.spec?.clusterIP,
+        externalIPs: s.spec?.externalIPs,
+        selector: s.spec?.selector || {},
+        ports: (s.spec?.ports || []).map((p: any) => ({
+          name: p.name,
+          port: p.port,
+          targetPort: p.targetPort,
+          protocol: p.protocol || 'TCP',
+          nodePort: p.nodePort,
+        })),
+        sessionAffinity: s.spec?.sessionAffinity,
+        creationTimestamp: s.metadata?.creationTimestamp,
+      }));
+
+      return {
+        namespace: params.namespace,
+        totalServices: services.length,
+        services,
+      };
+    } catch (err: any) {
+      throw new Error(`Failed to query service status: ${err.body?.message || err.message || err}`);
+    }
+  }
+
+  async getEndpointsStatus(params: EndpointsStatusParams): Promise<unknown> {
+    try {
+      let rawEndpoints: any[] = [];
+      if (params.serviceName) {
+        try {
+          const ep = await this.coreApi.readNamespacedEndpoints({
+            name: params.serviceName,
+            namespace: params.namespace,
+          });
+          rawEndpoints = [ep];
+        } catch {
+          const list = await this.coreApi.listNamespacedEndpoints({
+            namespace: params.namespace,
+          });
+          rawEndpoints = (list.items || []).filter((e: any) =>
+            e.metadata?.name?.includes(params.serviceName!)
+          );
+        }
+      } else {
+        const list = await this.coreApi.listNamespacedEndpoints({
+          namespace: params.namespace,
+        });
+        rawEndpoints = list.items || [];
+      }
+
+      if (rawEndpoints.length === 0) {
+        throw new Error(
+          params.serviceName
+            ? `Endpoints for service '${params.serviceName}' not found in namespace '${params.namespace}'`
+            : `No endpoints found in namespace '${params.namespace}'`
+        );
+      }
+
+      const endpoints = rawEndpoints.map((ep: any) => {
+        const subsets = ep.subsets || [];
+        let readyCount = 0;
+        let notReadyCount = 0;
+
+        const formattedSubsets = subsets.map((sub: any) => {
+          const readyAddresses = (sub.addresses || []).map((a: any) => {
+            readyCount++;
+            return {
+              ip: a.ip,
+              targetPodName: a.targetRef?.name,
+              nodeName: a.nodeName,
+            };
+          });
+
+          const notReadyAddresses = (sub.notReadyAddresses || []).map((a: any) => {
+            notReadyCount++;
+            return {
+              ip: a.ip,
+              targetPodName: a.targetRef?.name,
+              nodeName: a.nodeName,
+            };
+          });
+
+          const ports = (sub.ports || []).map((p: any) => ({
+            name: p.name,
+            port: p.port,
+            protocol: p.protocol || 'TCP',
+          }));
+
+          return { readyAddresses, notReadyAddresses, ports };
+        });
+
+        let warning: string | undefined;
+        if (readyCount === 0) {
+          if (notReadyCount > 0) {
+            warning = `Service '${ep.metadata?.name}' has ${notReadyCount} backend pod(s), but ALL are in NotReady state. Check pod readiness probes and container logs.`;
+          } else {
+            warning = `Service '${ep.metadata?.name}' has 0 endpoints! No pods match the service's selector or no matching pods are running.`;
+          }
+        }
+
+        return {
+          serviceName: ep.metadata?.name,
+          namespace: ep.metadata?.namespace,
+          hasEndpoints: readyCount > 0 || notReadyCount > 0,
+          readyEndpointsCount: readyCount,
+          notReadyEndpointsCount: notReadyCount,
+          warning,
+          subsets: formattedSubsets,
+        };
+      });
+
+      return {
+        namespace: params.namespace,
+        endpoints,
+      };
+    } catch (err: any) {
+      throw new Error(`Failed to query endpoints status: ${err.body?.message || err.message || err}`);
+    }
+  }
 }
+

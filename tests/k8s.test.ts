@@ -18,6 +18,10 @@ describe('K8sDiagnosticBackend', () => {
       listNode: vi.fn(),
       readNode: vi.fn(),
       listEventForAllNamespaces: vi.fn(),
+      readNamespacedService: vi.fn(),
+      listNamespacedService: vi.fn(),
+      readNamespacedEndpoints: vi.fn(),
+      listNamespacedEndpoints: vi.fn(),
     };
 
     mockAppsApi = {
@@ -243,4 +247,55 @@ describe('K8sDiagnosticBackend', () => {
     expect(result.retentionNote).toContain('1 hour by default');
     expect(result.retentionNote).toContain('journalctl -u kubelet');
   });
+
+  it('queries service configuration and extracts selector and ports', async () => {
+    mockCoreApi.readNamespacedService.mockResolvedValue({
+      metadata: { name: 'web-service', namespace: 'default' },
+      spec: {
+        type: 'ClusterIP',
+        clusterIP: '10.96.10.20',
+        selector: { app: 'web' },
+        ports: [{ name: 'http', port: 80, targetPort: 8080, protocol: 'TCP' }],
+      },
+    });
+
+    const result: any = await backend.getServiceStatus({ serviceName: 'web-service', namespace: 'default' });
+    expect(result.services.length).toBe(1);
+    expect(result.services[0].name).toBe('web-service');
+    expect(result.services[0].clusterIP).toBe('10.96.10.20');
+    expect(result.services[0].selector).toEqual({ app: 'web' });
+    expect(result.services[0].ports[0].targetPort).toBe(8080);
+  });
+
+  it('queries endpoints status and warns when 0 endpoints are available', async () => {
+    mockCoreApi.readNamespacedEndpoints.mockResolvedValue({
+      metadata: { name: 'web-service', namespace: 'default' },
+      subsets: [],
+    });
+
+    const result: any = await backend.getEndpointsStatus({ serviceName: 'web-service', namespace: 'default' });
+    expect(result.endpoints.length).toBe(1);
+    expect(result.endpoints[0].hasEndpoints).toBe(false);
+    expect(result.endpoints[0].readyEndpointsCount).toBe(0);
+    expect(result.endpoints[0].warning).toContain('0 endpoints');
+  });
+
+  it('queries endpoints status and flags when all endpoints are in NotReady state', async () => {
+    mockCoreApi.readNamespacedEndpoints.mockResolvedValue({
+      metadata: { name: 'api-service', namespace: 'default' },
+      subsets: [
+        {
+          addresses: [],
+          notReadyAddresses: [{ ip: '10.244.1.25', targetRef: { name: 'api-pod-1' } }],
+          ports: [{ name: 'http', port: 8080, protocol: 'TCP' }],
+        },
+      ],
+    });
+
+    const result: any = await backend.getEndpointsStatus({ serviceName: 'api-service', namespace: 'default' });
+    expect(result.endpoints[0].readyEndpointsCount).toBe(0);
+    expect(result.endpoints[0].notReadyEndpointsCount).toBe(1);
+    expect(result.endpoints[0].warning).toContain('ALL are in NotReady state');
+  });
 });
+

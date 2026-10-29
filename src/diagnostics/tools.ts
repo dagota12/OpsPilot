@@ -177,6 +177,48 @@ export function createStandardTools(backend: DiagnosticBackend): DiagnosticTool[
     },
   };
 
+  const getServiceStatusTool: DiagnosticTool<{ namespace: string; serviceName?: string }> = {
+    definition: {
+      name: 'get_service_status',
+      description: 'Inspect Kubernetes Service configuration including clusterIP, ports, targetPort, protocol, and pod selectors.',
+      parameters: z.object({
+        namespace: z.string().min(1, 'Namespace must not be empty'),
+        serviceName: z.string().optional(),
+      }),
+    },
+    isReadOnly: true,
+    async execute(params, context: ToolExecutionContext): Promise<ToolResult> {
+      const start = Date.now();
+      try {
+        const data = await backend.getServiceStatus(params);
+        return { success: true, data, executionTimeMs: Date.now() - start };
+      } catch (err: any) {
+        return { success: false, error: err.message || String(err), executionTimeMs: Date.now() - start };
+      }
+    },
+  };
+
+  const getEndpointsStatusTool: DiagnosticTool<{ namespace: string; serviceName?: string }> = {
+    definition: {
+      name: 'get_endpoints_status',
+      description: 'Inspect Kubernetes Endpoints and backend pod IP routing to detect missing endpoints, unready backends, or selector mismatches.',
+      parameters: z.object({
+        namespace: z.string().min(1, 'Namespace must not be empty'),
+        serviceName: z.string().optional(),
+      }),
+    },
+    isReadOnly: true,
+    async execute(params, context: ToolExecutionContext): Promise<ToolResult> {
+      const start = Date.now();
+      try {
+        const data = await backend.getEndpointsStatus(params);
+        return { success: true, data, executionTimeMs: Date.now() - start };
+      } catch (err: any) {
+        return { success: false, error: err.message || String(err), executionTimeMs: Date.now() - start };
+      }
+    },
+  };
+
   return [
     getDeploymentStatusTool,
     getPodStatusTool,
@@ -186,5 +228,8 @@ export function createStandardTools(backend: DiagnosticBackend): DiagnosticTool[
     getWorkloadConfigTool,
     getNodeStatusTool,
     getNodeEventsTool,
+    getServiceStatusTool,
+    getEndpointsStatusTool,
   ];
 }
+

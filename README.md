@@ -16,13 +16,13 @@ OpsPilot decouples the investigation core from any specific AI provider, present
 - `src/core/policy/`: Safety policy enforcing read-only verification, Zod schema validation, namespace allowlists, and output truncation limits.
 - `src/core/providers/`: Normalized `AIProvider` contract, deterministic `MockAIProvider`, and `GeminiProvider` adapter.
 - `src/providers/gemini.ts`: Google Gemini Adapter using `@google/genai` (maps Gemini function calling to the normalized `AIProvider` contract).
-- `src/diagnostics/`: `DiagnosticBackend` interface, 4 representative mock scenarios (`crashloop-missing-env`, `oom-killed`, `failed-readiness-probe`, `node-pressure-reboot`), and 7 standard read-only diagnostic tools (`get_pod_status`, `get_pod_events`, `get_container_logs`, `get_deployment_status`, `get_workload_config`, `get_node_status`, `get_node_events`).
+- `src/diagnostics/`: `DiagnosticBackend` interface, 5 representative mock scenarios (`crashloop-missing-env`, `oom-killed`, `failed-readiness-probe`, `node-pressure-reboot`, `service-endpoints-missing`), and 9 standard read-only diagnostic tools (`get_pod_status`, `get_pod_events`, `get_container_logs`, `get_deployment_status`, `get_workload_config`, `get_node_status`, `get_node_events`, `get_service_status`, `get_endpoints_status`).
 - `src/core/engine/`: Bounded investigation loop with tool-call budgets, per-tool timeouts, cooperative cancellation, and explicit termination states.
 - `src/cli/`: Command-line interface with structured terminal reporting.
 
 ## Running Tests
 
-Execute the full Vitest suite (41 automated tests covering engine loop, policy rules, timeouts, cancellation, node diagnostics, workload config inspection, and mocked Gemini adapter):
+Execute the full Vitest suite (47 automated tests covering engine loop, policy rules, timeouts, cancellation, node diagnostics, network/service diagnostics, and mocked Gemini adapter):
 
 ```bash
 bun run typecheck && bun run test
@@ -111,3 +111,5 @@ Available mock scenarios:
 1. `crashloop-missing-env`: Pod in CrashLoopBackOff due to undefined `JWT_SECRET_KEY`.
 2. `oom-killed`: Container terminated with exit code 137 (`OOMKilled`) exceeding 512Mi memory limit.
 3. `failed-readiness-probe`: Pod unready (0/1 Ready) due to readiness probe HTTP 500 when database connection fails.
+4. `node-pressure-reboot`: Pods terminating with exit code 255 across worker nodes due to node reboot or pressure.
+5. `service-endpoints-missing`: Service returns 502/503 errors with 0 ready endpoints due to a label selector mismatch.

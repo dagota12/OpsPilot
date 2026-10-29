@@ -8,6 +8,8 @@ import type {
   WorkloadConfigParams,
   NodeStatusParams,
   NodeEventsParams,
+  ServiceStatusParams,
+  EndpointsStatusParams,
 } from './interface.js';
 
 export interface MockClusterScenario {
@@ -22,6 +24,8 @@ export interface MockClusterScenario {
   workloadConfigs?: Record<string, unknown>;
   nodes?: Record<string, unknown>;
   nodeEvents?: Record<string, unknown[]>;
+  services?: Record<string, unknown>;
+  endpoints?: Record<string, unknown>;
 }
 
 export type ScenarioId =
@@ -29,7 +33,8 @@ export type ScenarioId =
   | 'oom-killed'
   | 'failed-readiness-probe'
   | 'pending-migration-job'
-  | 'node-pressure-reboot';
+  | 'node-pressure-reboot'
+  | 'service-endpoints-missing';
 
 export const MOCK_SCENARIOS: Record<ScenarioId, MockClusterScenario> = {
   'crashloop-missing-env': {
@@ -410,7 +415,70 @@ Killed`,
       'first-cluster-worker': [], // Expired events (0 count)
     },
   },
+  'service-endpoints-missing': {
+    id: 'service-endpoints-missing',
+    name: 'Service with 0 endpoints due to label selector mismatch',
+    description: 'web-service returns 502/503 because its selector app=web-frontend does not match pod labels app=frontend',
+    deployments: {
+      'frontend': {
+        name: 'frontend',
+        replicas: 2,
+        readyReplicas: 2,
+        availableReplicas: 2,
+        conditions: [
+          { type: 'Available', status: 'True', reason: 'MinimumReplicasAvailable' },
+        ],
+      },
+    },
+    pods: {
+      'frontend': [
+        {
+          name: 'frontend-7d4b96495-2m8kp',
+          phase: 'Running',
+          ready: true,
+          restartCount: 0,
+          nodeName: 'worker-node-1',
+          labels: { app: 'frontend', tier: 'ui' },
+        },
+        {
+          name: 'frontend-7d4b96495-9xl4v',
+          phase: 'Running',
+          ready: true,
+          restartCount: 0,
+          nodeName: 'worker-node-2',
+          labels: { app: 'frontend', tier: 'ui' },
+        },
+      ],
+    },
+    services: {
+      'web-service': {
+        name: 'web-service',
+        namespace: 'default',
+        type: 'ClusterIP',
+        clusterIP: '10.96.142.88',
+        selector: { app: 'web-frontend' },
+        ports: [
+          { name: 'http', port: 80, targetPort: 8080, protocol: 'TCP' },
+        ],
+      },
+    },
+    endpoints: {
+      'web-service': {
+        serviceName: 'web-service',
+        namespace: 'default',
+        hasEndpoints: false,
+        readyEndpointsCount: 0,
+        notReadyEndpointsCount: 0,
+        warning: "Service 'web-service' has 0 endpoints! No pods match the service's selector { app: 'web-frontend' }.",
+        subsets: [],
+      },
+    },
+    events: {},
+    logs: {},
+    resourceUsage: {},
+  },
 };
+
 
 export class MockDiagnosticBackend implements DiagnosticBackend {
   private scenario: MockClusterScenario;
@@ -544,4 +612,75 @@ export class MockDiagnosticBackend implements DiagnosticBackend {
         'Kubernetes API events are retained for 1 hour by default. Older historical events may have expired. If confirming historical node interruptions or reboots is required, inspect host systemd journal logs (e.g. journalctl -u kubelet).',
     };
   }
+
+  async getServiceStatus(params: ServiceStatusParams): Promise<unknown> {
+    const servicesMap = this.scenario.services || {};
+    if (params.serviceName) {
+      const svc = servicesMap[params.serviceName];
+      if (svc) {
+        return { namespace: params.namespace, totalServices: 1, services: [svc] };
+      }
+      if (Object.keys(servicesMap).length > 0) {
+        throw new Error(`Service '${params.serviceName}' not found in namespace '${params.namespace}'`);
+      }
+      return {
+        namespace: params.namespace,
+        totalServices: 1,
+        services: [
+          {
+            name: params.serviceName,
+            namespace: params.namespace,
+            type: 'ClusterIP',
+            clusterIP: '10.96.0.100',
+            selector: { app: params.serviceName },
+            ports: [{ name: 'http', port: 80, targetPort: 8080, protocol: 'TCP' }],
+          },
+        ],
+      };
+    }
+    const allServices = Object.values(servicesMap);
+    return {
+      namespace: params.namespace,
+      totalServices: allServices.length,
+      services: allServices,
+    };
+  }
+
+  async getEndpointsStatus(params: EndpointsStatusParams): Promise<unknown> {
+    const endpointsMap = this.scenario.endpoints || {};
+    if (params.serviceName) {
+      const ep = endpointsMap[params.serviceName];
+      if (ep) {
+        return { namespace: params.namespace, endpoints: [ep] };
+      }
+      if (Object.keys(endpointsMap).length > 0) {
+        throw new Error(`Endpoints for service '${params.serviceName}' not found in namespace '${params.namespace}'`);
+      }
+      return {
+        namespace: params.namespace,
+        endpoints: [
+          {
+            serviceName: params.serviceName,
+            namespace: params.namespace,
+            hasEndpoints: true,
+            readyEndpointsCount: 1,
+            notReadyEndpointsCount: 0,
+            subsets: [
+              {
+                readyAddresses: [{ ip: '10.244.1.15', targetPodName: `${params.serviceName}-pod-1` }],
+                notReadyAddresses: [],
+                ports: [{ name: 'http', port: 8080, protocol: 'TCP' }],
+              },
+            ],
+          },
+        ],
+      };
+    }
+    const allEndpoints = Object.values(endpointsMap);
+    return {
+      namespace: params.namespace,
+      endpoints: allEndpoints,
+    };
+  }
 }
+
