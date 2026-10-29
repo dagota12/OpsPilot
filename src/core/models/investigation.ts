@@ -33,6 +33,7 @@ export interface InvestigationRun {
 export interface InvestigationOptions {
   maxToolCalls?: number;
   maxDurationMs?: number;
+  targetNamespace?: string;
   allowedNamespaces?: string[];
   maxOutputSizeBytes?: number;
   perToolTimeoutMs?: number;

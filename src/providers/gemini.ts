@@ -291,7 +291,13 @@ export function extractReportFromText(text: string): IncidentReport | undefined 
               reasoning: String(h.reasoning || ''),
             }))
           : [],
-        recommendations: Array.isArray(parsed.recommendations) ? parsed.recommendations.map(String) : [],
+        recommendations: Array.isArray(parsed.recommendations)
+          ? parsed.recommendations.map((r: any) =>
+              typeof r === 'string'
+                ? r
+                : String(r?.action || r?.description || r?.statement || r?.text || r?.title || JSON.stringify(r))
+            )
+          : [],
         confidence: ['high', 'medium', 'low'].includes(parsed.confidence) ? parsed.confidence : 'medium',
         uncertaintyNotes: parsed.uncertaintyNotes ? String(parsed.uncertaintyNotes) : undefined,
       };

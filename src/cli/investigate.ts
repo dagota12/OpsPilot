@@ -98,6 +98,7 @@ export function registerInvestigateCommand(program: Command): void {
       console.log(`[2/3] Agent actively investigating...`);
 
       const run = await engine.investigate(prompt, {
+        targetNamespace: options.namespace,
         allowedNamespaces: options.backend === 'k8s' ? undefined : [options.namespace, 'staging', 'production'],
         maxToolCalls: parseInt(options.maxTools, 10),
       });
@@ -138,7 +139,8 @@ export function registerInvestigateCommand(program: Command): void {
 
         console.log(`\nRECOMMENDED ACTIONS:`);
         run.report.recommendations.forEach((rec, idx) => {
-          console.log(`  ${idx + 1}. ${rec}`);
+          const recText = typeof rec === 'object' ? JSON.stringify(rec) : rec;
+          console.log(`  ${idx + 1}. ${recText}`);
         });
 
         console.log(`\nCONFIDENCE: ${run.report.confidence.toUpperCase()}`);

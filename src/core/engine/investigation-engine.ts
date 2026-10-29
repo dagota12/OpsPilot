@@ -52,11 +52,15 @@ export class InvestigationEngine {
 
     addAudit('STATUS_CHANGE', { status: 'INVESTIGATING', prompt, options });
 
+    const targetNamespace = options.targetNamespace || 'default';
+
     const messages: AIMessage[] = [
       {
         role: 'system',
         content: `You are OpsPilot, an expert AI DevOps incident investigator.
 Your goal is to investigate infrastructure failures using read-only diagnostic tools.
+Target Kubernetes Namespace: "${targetNamespace}". Unless explicitly instructed otherwise by the user, you MUST pass namespace="${targetNamespace}" in your diagnostic tool calls.
+Batch your diagnostic queries when possible (e.g. calling get_pod_status, get_pod_events together) to minimize investigation latency.
 Ground all conclusions strictly in collected evidence. Do not guess or fabricate state.
 Distinguish clearly between observed facts, hypotheses, and recommendations.`,
       },
@@ -135,6 +139,13 @@ Distinguish clearly between observed facts, hypotheses, and recommendations.`,
             terminationReason = `Exceeded maximum tool call budget of ${maxToolCalls}`;
             addAudit('STATUS_CHANGE', { status, terminationReason });
             break;
+          }
+
+          // Route namespace to targetNamespace if user specified a non-default namespace and model omitted or defaulted it
+          if (options.targetNamespace && options.targetNamespace !== 'default') {
+            if (!toolCall.arguments['namespace'] || toolCall.arguments['namespace'] === 'default') {
+              toolCall.arguments['namespace'] = options.targetNamespace;
+            }
           }
 
           toolCallCount++;
@@ -271,6 +282,7 @@ Distinguish clearly between observed facts, hypotheses, and recommendations.`,
     return {
       id: runId,
       prompt,
+      namespace: targetNamespace,
       status,
       startedAt,
       completedAt,
