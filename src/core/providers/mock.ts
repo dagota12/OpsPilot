@@ -6,6 +6,7 @@ import type {
 } from './interface.js';
 import type { ToolDefinition } from '../tools/types.js';
 import type { IncidentReport } from '../models/report.js';
+import type { ScenarioId } from '../../diagnostics/mock.js';
 
 export interface MockStep {
   response: AIResponse;
@@ -15,10 +16,10 @@ export class MockAIProvider implements AIProvider {
   readonly id = 'mock';
   private stepIndex = 0;
   private scriptedResponses: AIResponse[] = [];
-  private scenarioId?: 'crashloop-missing-env' | 'oom-killed' | 'failed-readiness-probe';
+  private scenarioId?: ScenarioId;
 
   constructor(options?: {
-    scenarioId?: 'crashloop-missing-env' | 'oom-killed' | 'failed-readiness-probe';
+    scenarioId?: ScenarioId;
     scriptedResponses?: AIResponse[];
   }) {
     if (options?.scenarioId) {
@@ -34,7 +35,7 @@ export class MockAIProvider implements AIProvider {
     this.stepIndex = 0;
   }
 
-  setScenario(scenarioId: 'crashloop-missing-env' | 'oom-killed' | 'failed-readiness-probe'): void {
+  setScenario(scenarioId: ScenarioId): void {
     this.scenarioId = scenarioId;
     this.stepIndex = 0;
     this.scriptedResponses = [];
@@ -241,6 +242,62 @@ export class MockAIProvider implements AIProvider {
         confidence: 'high',
       };
       return { report, content: 'Investigation complete: Failing readiness probe due to database connection refusal.' };
+    }
+
+    if (scenario === 'pending-migration-job') {
+      if (toolMessages.length === 0) {
+        return {
+          content: 'Inspecting migration-job pod status...',
+          toolCalls: [
+            {
+              id: 'call_1',
+              name: 'get_pod_status',
+              arguments: { namespace: 'default', podName: 'migration-job-wprdn' },
+            },
+          ],
+        };
+      }
+      if (toolMessages.length === 1) {
+        return {
+          content: 'Pod is Pending with ErrImageNeverPull. Inspecting parent Job specification...',
+          toolCalls: [
+            {
+              id: 'call_2',
+              name: 'get_workload_config',
+              arguments: { namespace: 'default', kind: 'job', name: 'migration-job' },
+            },
+          ],
+        };
+      }
+      const report: IncidentReport = {
+        id: 'rep_pending_migration',
+        summary: 'Migration job is blocked in Pending because container image zcinema-api:jenkins-26 is missing locally with imagePullPolicy Never.',
+        observedFacts: [
+          {
+            id: 'fact_1',
+            statement: 'Pod migration-job-wprdn is Pending with ErrImageNeverPull.',
+            evidenceRef: ['call_1'],
+          },
+          {
+            id: 'fact_2',
+            statement: 'Job migration-job defines container migrate with imagePullPolicy Never.',
+            evidenceRef: ['call_2'],
+          },
+        ],
+        hypotheses: [
+          {
+            id: 'hypo_1',
+            statement: 'The image tag is not present on the node and imagePullPolicy Never prevents pulling it.',
+            likelihood: 'high',
+            reasoning: 'Verified by inspecting the Job workload specification and pod status.',
+          },
+        ],
+        recommendations: [
+          'Change imagePullPolicy to IfNotPresent or load the missing image onto the cluster nodes.',
+        ],
+        confidence: 'high',
+      };
+      return { report, content: 'Investigation complete: Migration job image missing with pull policy Never.' };
     }
 
     return { content: 'No scenario matched.' };

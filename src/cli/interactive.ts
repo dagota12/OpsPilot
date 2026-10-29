@@ -484,6 +484,16 @@ function renderIncidentReport(
   console.log(`\n${pc.bold('SUMMARY:')}`);
   console.log(`  ${report.summary}\n`);
 
+  // Investigation Trace
+  if (report.investigationTrace && report.investigationTrace.length > 0) {
+    console.log(pc.bold('INVESTIGATION TRACE:'));
+    for (const step of report.investigationTrace) {
+      const icon = step.success ? pc.green('✓') : pc.red('✗');
+      console.log(`  ${icon} [${pc.cyan(step.toolName)}] ${step.summary}`);
+    }
+    console.log();
+  }
+
   // Observed Facts
   if (report.observedFacts.length > 0) {
     console.log(pc.bold('OBSERVED FACTS:'));
@@ -515,6 +525,15 @@ function renderIncidentReport(
       const recText = typeof rec === 'object' ? JSON.stringify(rec) : rec;
       console.log(`  ${pc.cyan(`${idx + 1}.`)} ${recText}`);
     });
+    console.log();
+  }
+
+  // Diagnostic Gaps
+  if (report.diagnosticGaps && report.diagnosticGaps.length > 0) {
+    console.log(pc.bold('DIAGNOSTIC GAPS / UNKNOWN AREAS:'));
+    for (const gap of report.diagnosticGaps) {
+      console.log(`  ${pc.yellow('!')} ${gap}`);
+    }
     console.log();
   }
 

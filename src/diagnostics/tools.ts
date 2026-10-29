@@ -112,11 +112,34 @@ export function createStandardTools(backend: DiagnosticBackend): DiagnosticTool[
     },
   };
 
+  const getWorkloadConfigTool: DiagnosticTool<{ namespace: string; name: string; kind?: 'deployment' | 'job' | 'cronjob' | 'statefulset' | 'daemonset' }> = {
+    definition: {
+      name: 'get_workload_config',
+      description: 'Inspect workload specifications (Deployment, Job, CronJob) including container images, pull policies, commands, args, and resource limits.',
+      parameters: z.object({
+        namespace: z.string().min(1, 'Namespace must not be empty'),
+        name: z.string().min(1, 'Workload name must not be empty'),
+        kind: z.enum(['deployment', 'job', 'cronjob', 'statefulset', 'daemonset']).optional(),
+      }),
+    },
+    isReadOnly: true,
+    async execute(params, context: ToolExecutionContext): Promise<ToolResult> {
+      const start = Date.now();
+      try {
+        const data = await backend.getWorkloadConfig(params);
+        return { success: true, data, executionTimeMs: Date.now() - start };
+      } catch (err: any) {
+        return { success: false, error: err.message || String(err), executionTimeMs: Date.now() - start };
+      }
+    },
+  };
+
   return [
     getDeploymentStatusTool,
     getPodStatusTool,
     getPodEventsTool,
     getContainerLogsTool,
     getResourceUsageTool,
+    getWorkloadConfigTool,
   ];
 }

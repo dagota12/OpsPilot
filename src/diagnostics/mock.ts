@@ -5,6 +5,7 @@ import type {
   PodEventsParams,
   ContainerLogsParams,
   ResourceUsageParams,
+  WorkloadConfigParams,
 } from './interface.js';
 
 export interface MockClusterScenario {
@@ -16,9 +17,14 @@ export interface MockClusterScenario {
   events: Record<string, unknown>;
   logs: Record<string, string>;
   resourceUsage: Record<string, unknown>;
+  workloadConfigs?: Record<string, unknown>;
 }
 
-export type ScenarioId = 'crashloop-missing-env' | 'oom-killed' | 'failed-readiness-probe';
+export type ScenarioId =
+  | 'crashloop-missing-env'
+  | 'oom-killed'
+  | 'failed-readiness-probe'
+  | 'pending-migration-job';
 
 export const MOCK_SCENARIOS: Record<ScenarioId, MockClusterScenario> = {
   'crashloop-missing-env': {
@@ -229,6 +235,89 @@ Killed`,
         memory: { current: '98Mi', limit: '512Mi' },
       },
     },
+    workloadConfigs: {
+      'payment-gateway': {
+        kind: 'Deployment',
+        name: 'payment-gateway',
+        namespace: 'default',
+        containers: [
+          {
+            name: 'gateway',
+            image: 'payment-gateway:v1.0',
+            imagePullPolicy: 'IfNotPresent',
+            resources: { limits: { memory: '512Mi', cpu: '500m' } },
+          },
+        ],
+      },
+    },
+  },
+  'pending-migration-job': {
+    id: 'pending-migration-job',
+    name: 'Migration Job stuck in Pending due to ErrImageNeverPull',
+    description: 'migration-job-pod is Pending because image zcinema-api:jenkins-26 has pullPolicy Never and is not present',
+    deployments: {},
+    pods: {
+      'migration-job': [
+        {
+          name: 'migration-job-wprdn',
+          phase: 'Pending',
+          ready: false,
+          restartCount: 0,
+          ownerReferences: [{ kind: 'Job', name: 'migration-job' }],
+          conditions: [
+            { type: 'PodScheduled', status: 'True' },
+            { type: 'ContainersReady', status: 'False', reason: 'ContainersNotReady', message: 'containers with unready status: [migrate]' },
+          ],
+          containerStatuses: [
+            {
+              name: 'migrate',
+              ready: false,
+              restartCount: 0,
+              image: 'zcinema-api:jenkins-26',
+              state: {
+                waiting: {
+                  reason: 'ErrImageNeverPull',
+                  message: 'Container image "zcinema-api:jenkins-26" is not present with pull policy of Never',
+                },
+              },
+            },
+          ],
+        },
+      ],
+    },
+    events: {
+      'migration-job': [
+        {
+          type: 'Warning',
+          reason: 'ErrImageNeverPull',
+          count: 5,
+          message: 'Container image "zcinema-api:jenkins-26" is not present with pull policy of Never',
+          firstTimestamp: '2026-10-28T14:00:00Z',
+          lastTimestamp: '2026-10-28T14:15:00Z',
+        },
+      ],
+    },
+    logs: {},
+    resourceUsage: {},
+    workloadConfigs: {
+      'migration-job': {
+        kind: 'Job',
+        name: 'migration-job',
+        namespace: 'default',
+        restartPolicy: 'Never',
+        backoffLimit: 3,
+        containers: [
+          {
+            name: 'migrate',
+            image: 'zcinema-api:jenkins-26',
+            imagePullPolicy: 'Never',
+            command: ['npm', 'run', 'migrate'],
+            resources: { requests: { memory: '256Mi' }, limits: { memory: '512Mi' } },
+            env: [{ name: 'DATABASE_URL', value: '[REDACTED]' }],
+          },
+        ],
+      },
+    },
   },
 };
 
@@ -295,5 +384,22 @@ export class MockDiagnosticBackend implements DiagnosticBackend {
       }
     }
     return { usages: this.scenario.resourceUsage };
+  }
+
+  async getWorkloadConfig(params: WorkloadConfigParams): Promise<unknown> {
+    const config = this.scenario.workloadConfigs?.[params.name];
+    if (config) {
+      return config;
+    }
+    const dep = this.scenario.deployments[params.name];
+    if (dep) {
+      return {
+        kind: 'Deployment',
+        name: params.name,
+        namespace: params.namespace,
+        deployment: dep,
+      };
+    }
+    throw new Error(`Workload '${params.name}' not found in namespace '${params.namespace}'`);
   }
 }

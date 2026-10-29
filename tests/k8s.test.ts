@@ -1,10 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { AppsV1Api } from '@kubernetes/client-node';
+import { AppsV1Api, BatchV1Api } from '@kubernetes/client-node';
 import { K8sDiagnosticBackend } from '../src/diagnostics/k8s.js';
 
 describe('K8sDiagnosticBackend', () => {
   let mockCoreApi: any;
   let mockAppsApi: any;
+  let mockBatchApi: any;
   let mockKc: any;
   let backend: K8sDiagnosticBackend;
 
@@ -20,12 +21,18 @@ describe('K8sDiagnosticBackend', () => {
       readNamespacedDeployment: vi.fn(),
     };
 
+    mockBatchApi = {
+      readNamespacedJob: vi.fn(),
+      readNamespacedCronJob: vi.fn(),
+    };
+
     mockKc = {
       getCurrentContext: vi.fn().mockReturnValue('test-context'),
       getCurrentCluster: vi.fn().mockReturnValue({ name: 'test-cluster', server: 'https://127.0.0.1:6443' }),
       setCurrentContext: vi.fn(),
       makeApiClient: vi.fn().mockImplementation((apiClass: any) => {
         if (apiClass === AppsV1Api || apiClass.name?.includes('AppsV1Api')) return mockAppsApi;
+        if (apiClass === BatchV1Api || apiClass.name?.includes('BatchV1Api')) return mockBatchApi;
         return mockCoreApi;
       }),
     };
@@ -129,5 +136,58 @@ describe('K8sDiagnosticBackend', () => {
     expect(result.events.length).toBe(2);
     expect(result.events[0].type).toBe('Warning');
     expect(result.events[0].reason).toBe('BackOff');
+  });
+
+  it('queries workload configuration for Job and redacts sensitive environment variables', async () => {
+    mockBatchApi.readNamespacedJob.mockResolvedValue({
+      metadata: { name: 'db-migration', namespace: 'default' },
+      spec: {
+        completions: 1,
+        backoffLimit: 2,
+        template: {
+          spec: {
+            restartPolicy: 'Never',
+            containers: [
+              {
+                name: 'migrate',
+                image: 'db-migration:v1.0',
+                imagePullPolicy: 'Never',
+                command: ['npm', 'run', 'migrate'],
+                env: [
+                  { name: 'NODE_ENV', value: 'production' },
+                  { name: 'DB_PASSWORD', value: 'super-secret-123' },
+                  { name: 'API_SECRET_KEY', value: 'token-xyz' },
+                  { name: 'CONFIG_FILE', valueFrom: { configMapKeyRef: { name: 'app-config', key: 'file' } } },
+                ],
+                resources: {
+                  requests: { memory: '256Mi' },
+                  limits: { memory: '512Mi' },
+                },
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    const config: any = await backend.getWorkloadConfig({
+      name: 'db-migration',
+      namespace: 'default',
+      kind: 'job',
+    });
+
+    expect(config.kind).toBe('Job');
+    expect(config.name).toBe('db-migration');
+    expect(config.restartPolicy).toBe('Never');
+    expect(config.containers.length).toBe(1);
+    expect(config.containers[0].imagePullPolicy).toBe('Never');
+    expect(config.containers[0].resources.limits.memory).toBe('512Mi');
+
+    // Verify sensitive variables are safely redacted
+    const envVars = config.containers[0].env;
+    expect(envVars.find((e: any) => e.name === 'NODE_ENV').value).toBe('production');
+    expect(envVars.find((e: any) => e.name === 'DB_PASSWORD').value).toBe('[REDACTED]');
+    expect(envVars.find((e: any) => e.name === 'API_SECRET_KEY').value).toBe('[REDACTED]');
+    expect(envVars.find((e: any) => e.name === 'CONFIG_FILE').source).toBe('configMapKeyRef');
   });
 });

@@ -300,6 +300,14 @@ export function extractReportFromText(text: string): IncidentReport | undefined 
           : [],
         confidence: ['high', 'medium', 'low'].includes(parsed.confidence) ? parsed.confidence : 'medium',
         uncertaintyNotes: parsed.uncertaintyNotes ? String(parsed.uncertaintyNotes) : undefined,
+        diagnosticGaps: Array.isArray(parsed.diagnosticGaps) ? parsed.diagnosticGaps.map(String) : undefined,
+        investigationTrace: Array.isArray(parsed.investigationTrace)
+          ? parsed.investigationTrace.map((t: any) => ({
+              toolName: String(t.toolName || ''),
+              success: Boolean(t.success),
+              summary: String(t.summary || ''),
+            }))
+          : undefined,
       };
     }
   } catch {

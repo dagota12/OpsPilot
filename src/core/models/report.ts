@@ -14,6 +14,12 @@ export interface Hypothesis {
   reasoning: string;
 }
 
+export interface InvestigationTraceStep {
+  toolName: string;
+  success: boolean;
+  summary: string;
+}
+
 export interface IncidentReport {
   id: string;
   summary: string;
@@ -22,6 +28,8 @@ export interface IncidentReport {
   recommendations: string[];
   confidence: Confidence;
   uncertaintyNotes?: string;
+  diagnosticGaps?: string[];
+  investigationTrace?: InvestigationTraceStep[];
 }
 
 export interface Evidence {

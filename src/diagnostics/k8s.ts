@@ -2,6 +2,7 @@ import {
   KubeConfig,
   CoreV1Api,
   AppsV1Api,
+  BatchV1Api,
 } from '@kubernetes/client-node';
 import type {
   DiagnosticBackend,
@@ -10,6 +11,7 @@ import type {
   PodEventsParams,
   ContainerLogsParams,
   ResourceUsageParams,
+  WorkloadConfigParams,
 } from './interface.js';
 
 export interface K8sBackendOptions {
@@ -22,6 +24,7 @@ export class K8sDiagnosticBackend implements DiagnosticBackend {
   private kc: KubeConfig;
   private coreApi: CoreV1Api;
   private appsApi: AppsV1Api;
+  private batchApi: BatchV1Api;
 
   constructor(options: K8sBackendOptions = {}) {
     this.kc = options.kubeConfig || new KubeConfig();
@@ -40,6 +43,7 @@ export class K8sDiagnosticBackend implements DiagnosticBackend {
 
     this.coreApi = this.kc.makeApiClient(CoreV1Api);
     this.appsApi = this.kc.makeApiClient(AppsV1Api);
+    this.batchApi = this.kc.makeApiClient(BatchV1Api);
   }
 
   getContextInfo(): { currentContext: string; clusterName: string; server: string } {
@@ -136,6 +140,10 @@ export class K8sDiagnosticBackend implements DiagnosticBackend {
           restartCount: totalRestarts,
           nodeName: p.spec?.nodeName,
           startTime: p.status?.startTime,
+          ownerReferences: (p.metadata?.ownerReferences || []).map((o: any) => ({
+            kind: o.kind,
+            name: o.name,
+          })),
           conditions: (p.status?.conditions || []).map((c: any) => ({
             type: c.type,
             status: c.status,
@@ -259,6 +267,137 @@ export class K8sDiagnosticBackend implements DiagnosticBackend {
       throw new Error(
         `Failed to query resource configuration in namespace '${params.namespace}': ${err.body?.message || err.message || err}`
       );
+    }
+  }
+
+  async getWorkloadConfig(params: WorkloadConfigParams): Promise<unknown> {
+    const kind = params.kind?.toLowerCase();
+
+    const sanitizeEnvVars = (envList?: any[]) => {
+      if (!envList || !Array.isArray(envList)) return [];
+      return envList.map((e) => {
+        const isSensitive = /key|secret|token|password|auth|pwd|credential|api_key/i.test(e.name || '');
+        if (e.valueFrom) {
+          return { name: e.name, source: Object.keys(e.valueFrom)[0] };
+        }
+        return {
+          name: e.name,
+          value: isSensitive ? '[REDACTED]' : e.value,
+        };
+      });
+    };
+
+    const formatContainers = (containers?: any[]) => {
+      return (containers || []).map((c: any) => ({
+        name: c.name,
+        image: c.image,
+        imagePullPolicy: c.imagePullPolicy || 'IfNotPresent',
+        command: c.command,
+        args: c.args,
+        resources: {
+          requests: c.resources?.requests || {},
+          limits: c.resources?.limits || {},
+        },
+        env: sanitizeEnvVars(c.env),
+      }));
+    };
+
+    try {
+      // 1. Explicit or attempted Job lookup
+      if (kind === 'job' || (!kind && (params.name.includes('job') || params.name.includes('migrate')))) {
+        try {
+          const job = await this.batchApi.readNamespacedJob({
+            name: params.name,
+            namespace: params.namespace,
+          });
+          return {
+            kind: 'Job',
+            name: job.metadata?.name,
+            namespace: job.metadata?.namespace,
+            ownerReferences: (job.metadata?.ownerReferences || []).map((o: any) => ({
+              kind: o.kind,
+              name: o.name,
+            })),
+            completions: job.spec?.completions,
+            parallelism: job.spec?.parallelism,
+            backoffLimit: job.spec?.backoffLimit,
+            active: job.status?.active,
+            succeeded: job.status?.succeeded,
+            failed: job.status?.failed,
+            restartPolicy: job.spec?.template?.spec?.restartPolicy,
+            containers: formatContainers(job.spec?.template?.spec?.containers),
+            initContainers: formatContainers(job.spec?.template?.spec?.initContainers),
+          };
+        } catch (err: any) {
+          if (kind === 'job') {
+            throw new Error(`Job '${params.name}' not found in namespace '${params.namespace}': ${err.body?.message || err.message}`);
+          }
+        }
+      }
+
+      // 2. Explicit or attempted CronJob lookup
+      if (kind === 'cronjob') {
+        const cron = await this.batchApi.readNamespacedCronJob({
+          name: params.name,
+          namespace: params.namespace,
+        });
+        return {
+          kind: 'CronJob',
+          name: cron.metadata?.name,
+          namespace: cron.metadata?.namespace,
+          schedule: cron.spec?.schedule,
+          suspend: cron.spec?.suspend,
+          containers: formatContainers(cron.spec?.jobTemplate?.spec?.template?.spec?.containers),
+        };
+      }
+
+      // 3. Deployment lookup (default or explicit)
+      try {
+        const dep = await this.appsApi.readNamespacedDeployment({
+          name: params.name,
+          namespace: params.namespace,
+        });
+        return {
+          kind: 'Deployment',
+          name: dep.metadata?.name,
+          namespace: dep.metadata?.namespace,
+          replicas: dep.spec?.replicas,
+          strategy: dep.spec?.strategy?.type,
+          ownerReferences: (dep.metadata?.ownerReferences || []).map((o: any) => ({
+            kind: o.kind,
+            name: o.name,
+          })),
+          containers: formatContainers(dep.spec?.template?.spec?.containers),
+          initContainers: formatContainers(dep.spec?.template?.spec?.initContainers),
+        };
+      } catch (err: any) {
+        // If kind was not specified, try Job as fallback
+        if (!kind) {
+          try {
+            const job = await this.batchApi.readNamespacedJob({
+              name: params.name,
+              namespace: params.namespace,
+            });
+            return {
+              kind: 'Job',
+              name: job.metadata?.name,
+              namespace: job.metadata?.namespace,
+              ownerReferences: (job.metadata?.ownerReferences || []).map((o: any) => ({
+                kind: o.kind,
+                name: o.name,
+              })),
+              backoffLimit: job.spec?.backoffLimit,
+              restartPolicy: job.spec?.template?.spec?.restartPolicy,
+              containers: formatContainers(job.spec?.template?.spec?.containers),
+            };
+          } catch {}
+        }
+        throw new Error(
+          `Workload '${params.name}' (${kind || 'deployment/job'}) not found in namespace '${params.namespace}': ${err.body?.message || err.message}`
+        );
+      }
+    } catch (err: any) {
+      throw new Error(`Failed to query workload config '${params.name}' in namespace '${params.namespace}': ${err.message || err}`);
     }
   }
 }

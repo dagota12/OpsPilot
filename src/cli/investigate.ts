@@ -125,6 +125,16 @@ export function registerInvestigateCommand(program: Command): void {
         console.log(`\nSUMMARY:`);
         console.log(`  ${run.report.summary}\n`);
 
+        // Investigation trace
+        if (run.report.investigationTrace && run.report.investigationTrace.length > 0) {
+          console.log(`INVESTIGATION TRACE:`);
+          for (const step of run.report.investigationTrace) {
+            const icon = step.success ? '✓' : '✗';
+            console.log(`  ${icon} [${step.toolName}] ${step.summary}`);
+          }
+          console.log();
+        }
+
         console.log(`OBSERVED FACTS:`);
         for (const fact of run.report.observedFacts) {
           console.log(`  • ${fact.statement}`);
@@ -143,7 +153,17 @@ export function registerInvestigateCommand(program: Command): void {
           console.log(`  ${idx + 1}. ${recText}`);
         });
 
+        if (run.report.diagnosticGaps && run.report.diagnosticGaps.length > 0) {
+          console.log(`\nDIAGNOSTIC GAPS / UNKNOWN AREAS:`);
+          for (const gap of run.report.diagnosticGaps) {
+            console.log(`  ! ${gap}`);
+          }
+        }
+
         console.log(`\nCONFIDENCE: ${run.report.confidence.toUpperCase()}`);
+        if (run.report.uncertaintyNotes) {
+          console.log(`NOTES:      ${run.report.uncertaintyNotes}`);
+        }
         console.log(`======================================================\n`);
       } else {
         console.log(`\nNo incident report produced. Termination reason: ${run.terminationReason}\n`);

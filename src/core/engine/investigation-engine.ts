@@ -60,11 +60,20 @@ export class InvestigationEngine {
       {
         role: 'system',
         content: `You are OpsPilot, an expert AI DevOps incident investigator.
-Your goal is to investigate infrastructure failures using read-only diagnostic tools.
+Your goal is to investigate infrastructure failures using read-only diagnostic tools through bounded, adaptive exploration.
 Target Kubernetes Namespace: "${targetNamespace}". Unless explicitly instructed otherwise by the user, you MUST pass namespace="${targetNamespace}" in your diagnostic tool calls.
-Batch your diagnostic queries when possible (e.g. calling get_pod_status, get_pod_events together) to minimize investigation latency.
-Ground all conclusions strictly in collected evidence. Do not guess or fabricate state.
-Distinguish clearly between observed facts, hypotheses, and recommendations.`,
+
+ADAPTIVE INVESTIGATION RULES:
+1. Dynamically select follow-up tools based on the actual findings of previous tool calls. Do not follow a rigid sequence.
+   - Pending pod: Check pod status/conditions -> inspect events -> if container image or configuration issue, inspect parent workload spec with get_workload_config (Job/Deployment).
+   - CrashLoopBackOff: Inspect pod status/exit code -> inspect warning events -> inspect previous/current container logs with get_container_logs -> check workload configuration/env vars.
+   - Failed rollout / unready pods: Inspect deployment status -> inspect affected pods -> check events & readiness probe errors.
+   - Resource pressure: Inspect pod status -> check resource usage with get_resource_usage -> inspect resource limits in workload config.
+2. Stop immediately once sufficient evidence is gathered to explain the failure, or when no further diagnostic leads remain. Avoid redundant tool calls.
+3. Every factual claim MUST directly reference a tool call that succeeded during this investigation. Never claim a resource (Job, Deployment, Pod, Log) was inspected if that tool was not executed or failed.
+4. Distinguish the immediate failure symptom (e.g. exit code 137, ErrImageNeverPull, probe HTTP 500) from the underlying root cause (e.g. memory limit exceeded, imagePullPolicy Never with missing local image, unreachable database).
+5. Separate confirmed observations from hypotheses and unknown areas. Explicitly record important diagnostic gaps (e.g. logs truncated or unavailable, workload deleted).
+6. Base confidence directly on evidence: HIGH only if the root cause is confirmed by tool evidence; MEDIUM or LOW if critical diagnostic leads remain unverified.`,
       },
       {
         role: 'user',
@@ -100,7 +109,7 @@ Distinguish clearly between observed facts, hypotheses, and recommendations.`,
 
         // If provider returned a final report or concluded
         if (aiResponse.report) {
-          finalReport = this.validateReportEvidence(aiResponse.report, evidenceList);
+          finalReport = this.validateReportEvidence(aiResponse.report, evidenceList, auditLog);
           status = 'COMPLETED';
           terminationReason = 'Investigation concluded with final incident report';
           addAudit('STATUS_CHANGE', { status, terminationReason, reportId: finalReport.id });
@@ -296,7 +305,11 @@ Distinguish clearly between observed facts, hypotheses, and recommendations.`,
     };
   }
 
-  private validateReportEvidence(report: IncidentReport, evidenceList: Evidence[]): IncidentReport {
+  private validateReportEvidence(
+    report: IncidentReport,
+    evidenceList: Evidence[],
+    auditLog?: AuditEntry[]
+  ): IncidentReport {
     const validEvidenceIds = new Set<string>();
     for (const e of evidenceList) {
       validEvidenceIds.add(e.id);
@@ -305,8 +318,9 @@ Distinguish clearly between observed facts, hypotheses, and recommendations.`,
     const unsupportedFacts: string[] = [];
 
     const validatedFacts = report.observedFacts.map((fact) => {
-      const validRefs = fact.evidenceRef.filter((ref) => validEvidenceIds.has(ref));
-      if (validRefs.length === 0 && fact.evidenceRef.length > 0) {
+      const validRefs = (fact.evidenceRef || []).filter((ref) => validEvidenceIds.has(ref));
+      // Grounding requirement: fact must reference at least one valid evidence item retrieved by a successful tool call
+      if (validRefs.length === 0) {
         unsupportedFacts.push(fact.statement);
       }
       return {
@@ -317,11 +331,35 @@ Distinguish clearly between observed facts, hypotheses, and recommendations.`,
 
     let uncertaintyNotes = report.uncertaintyNotes;
     let confidence = report.confidence;
+    const diagnosticGaps = [...(report.diagnosticGaps || [])];
 
     if (unsupportedFacts.length > 0) {
       const note = `Warning: ${unsupportedFacts.length} observed fact(s) referenced invalid or nonexistent evidence IDs and were unlinked.`;
       uncertaintyNotes = uncertaintyNotes ? `${uncertaintyNotes} | ${note}` : note;
       confidence = 'low';
+      for (const uf of unsupportedFacts) {
+        const gapMsg = `Unsubstantiated finding: ${uf}`;
+        if (!diagnosticGaps.includes(gapMsg)) {
+          diagnosticGaps.push(gapMsg);
+        }
+      }
+    }
+
+    // Build or enrich concise investigation trace
+    const trace = report.investigationTrace ? [...report.investigationTrace] : [];
+    if (trace.length === 0 && auditLog) {
+      for (const audit of auditLog) {
+        if (audit.type === 'TOOL_RESULT') {
+          const name = String(audit.details['name'] || 'diagnostic_tool');
+          const success = Boolean(audit.details['success']);
+          const err = audit.details['error'] ? ` (Failed: ${audit.details['error']})` : '';
+          trace.push({
+            toolName: name,
+            success,
+            summary: success ? `Retrieved diagnostic observations from ${name}` : `Query failed for ${name}${err}`,
+          });
+        }
+      }
     }
 
     return {
@@ -329,6 +367,8 @@ Distinguish clearly between observed facts, hypotheses, and recommendations.`,
       observedFacts: validatedFacts,
       confidence,
       uncertaintyNotes,
+      diagnosticGaps: diagnosticGaps.length > 0 ? diagnosticGaps : undefined,
+      investigationTrace: trace.length > 0 ? trace : undefined,
     };
   }
 }

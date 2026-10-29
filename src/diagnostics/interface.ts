@@ -27,10 +27,17 @@ export interface ResourceUsageParams {
   podName?: string;
 }
 
+export interface WorkloadConfigParams {
+  namespace: string;
+  name: string;
+  kind?: 'deployment' | 'job' | 'cronjob' | 'statefulset' | 'daemonset';
+}
+
 export interface DiagnosticBackend {
   getDeploymentStatus(params: DeploymentStatusParams): Promise<unknown>;
   getPodStatus(params: PodStatusParams): Promise<unknown>;
   getPodEvents(params: PodEventsParams): Promise<unknown>;
   getContainerLogs(params: ContainerLogsParams): Promise<unknown>;
   getResourceUsage(params: ResourceUsageParams): Promise<unknown>;
+  getWorkloadConfig(params: WorkloadConfigParams): Promise<unknown>;
 }
