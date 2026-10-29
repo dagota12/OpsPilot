@@ -34,7 +34,7 @@ export class InvestigationEngine {
     const startedAt = Date.now();
     const runId = `run_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
     const maxToolCalls = options.maxToolCalls ?? 10;
-    const maxDurationMs = options.maxDurationMs ?? 60_000;
+    const maxDurationMs = options.maxDurationMs ?? 120_000;
     const perToolTimeoutMs = options.perToolTimeoutMs ?? 5_000;
     const maxOutputSizeBytes = options.maxOutputSizeBytes ?? 32 * 1024;
     const allowedNamespaces = options.allowedNamespaces;
@@ -69,10 +69,12 @@ ADAPTIVE INVESTIGATION RULES:
    - CrashLoopBackOff: Inspect pod status/exit code -> inspect warning events -> inspect previous/current container logs with get_container_logs -> check workload configuration/env vars.
    - Failed rollout / unready pods: Inspect deployment status -> inspect affected pods -> check events & readiness probe errors.
    - Resource pressure: Inspect pod status -> check resource usage with get_resource_usage -> inspect resource limits in workload config.
+   - Synchronized restarts / infrastructure issues: If multiple pods restart at the same time or exit with 255/Unknown/eviction, follow pod nodeName references to inspect the host node with get_node_status and get_node_events. Inspect node readiness, pressure conditions (MemoryPressure, DiskPressure, PIDPressure), and taints.
+   - Expired or missing node events: Kubernetes API events expire after 1 hour by default. If node events are empty, do NOT claim a node reboot or hardware crash is confirmed. Acknowledge that Kubernetes API event history has expired and explicitly identify host/infrastructure logs (e.g. journalctl -u kubelet, node reboot logs) as the required next evidence source.
 2. Stop immediately once sufficient evidence is gathered to explain the failure, or when no further diagnostic leads remain. Avoid redundant tool calls.
-3. Every factual claim MUST directly reference a tool call that succeeded during this investigation. Never claim a resource (Job, Deployment, Pod, Log) was inspected if that tool was not executed or failed.
-4. Distinguish the immediate failure symptom (e.g. exit code 137, ErrImageNeverPull, probe HTTP 500) from the underlying root cause (e.g. memory limit exceeded, imagePullPolicy Never with missing local image, unreachable database).
-5. Separate confirmed observations from hypotheses and unknown areas. Explicitly record important diagnostic gaps (e.g. logs truncated or unavailable, workload deleted).
+3. Every factual claim MUST directly reference a tool call that succeeded during this investigation. Never claim a resource (Job, Deployment, Pod, Node, Log) was inspected if that tool was not executed or failed.
+4. Distinguish the immediate failure symptom (e.g. exit code 137, exit code 255, ErrImageNeverPull, probe HTTP 500) from the underlying root cause (e.g. memory limit exceeded, node eviction, imagePullPolicy Never with missing local image, unreachable database).
+5. Separate confirmed observations from hypotheses and unknown areas. Explicitly record important diagnostic gaps (e.g. logs truncated or unavailable, node events expired).
 6. Base confidence directly on evidence: HIGH only if the root cause is confirmed by tool evidence; MEDIUM or LOW if critical diagnostic leads remain unverified.`,
       },
       {
@@ -153,7 +155,8 @@ ADAPTIVE INVESTIGATION RULES:
           }
 
           // Route namespace to targetNamespace if user specified a non-default namespace and model omitted or defaulted it
-          if (options.targetNamespace && options.targetNamespace !== 'default') {
+          // Do NOT route namespace for cluster-scoped node tools
+          if (options.targetNamespace && options.targetNamespace !== 'default' && !toolCall.name.startsWith('get_node_')) {
             if (!toolCall.arguments['namespace'] || toolCall.arguments['namespace'] === 'default') {
               toolCall.arguments['namespace'] = options.targetNamespace;
             }

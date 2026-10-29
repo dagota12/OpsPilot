@@ -6,6 +6,8 @@ import type {
   ContainerLogsParams,
   ResourceUsageParams,
   WorkloadConfigParams,
+  NodeStatusParams,
+  NodeEventsParams,
 } from './interface.js';
 
 export interface MockClusterScenario {
@@ -18,13 +20,16 @@ export interface MockClusterScenario {
   logs: Record<string, string>;
   resourceUsage: Record<string, unknown>;
   workloadConfigs?: Record<string, unknown>;
+  nodes?: Record<string, unknown>;
+  nodeEvents?: Record<string, unknown[]>;
 }
 
 export type ScenarioId =
   | 'crashloop-missing-env'
   | 'oom-killed'
   | 'failed-readiness-probe'
-  | 'pending-migration-job';
+  | 'pending-migration-job'
+  | 'node-pressure-reboot';
 
 export const MOCK_SCENARIOS: Record<ScenarioId, MockClusterScenario> = {
   'crashloop-missing-env': {
@@ -319,6 +324,92 @@ Killed`,
       },
     },
   },
+  'node-pressure-reboot': {
+    id: 'node-pressure-reboot',
+    name: 'Synchronized pod termination with exit code 255 across worker node',
+    description: 'Multiple pods on first-cluster-worker terminated abruptly at the same time with exit code 255.',
+    deployments: {
+      'zcinema-api': {
+        name: 'zcinema-api',
+        replicas: 2,
+        readyReplicas: 2,
+        availableReplicas: 2,
+      },
+    },
+    pods: {
+      'zcinema': [
+        {
+          name: 'zcinema-api-dbc55fc96-pqjdz',
+          phase: 'Running',
+          ready: true,
+          restartCount: 15,
+          nodeName: 'first-cluster-worker',
+          containerStatuses: [
+            {
+              name: 'api',
+              ready: true,
+              restartCount: 15,
+              lastState: {
+                terminated: {
+                  exitCode: 255,
+                  reason: 'Error',
+                  finishedAt: '2026-10-29T05:25:00Z',
+                },
+              },
+            },
+          ],
+        },
+        {
+          name: 'zcinema-db-1',
+          phase: 'Running',
+          ready: true,
+          restartCount: 125,
+          nodeName: 'first-cluster-worker',
+          containerStatuses: [
+            {
+              name: 'postgres',
+              ready: true,
+              restartCount: 125,
+              lastState: {
+                terminated: {
+                  exitCode: 255,
+                  reason: 'Error',
+                  finishedAt: '2026-10-29T05:25:00Z',
+                },
+              },
+            },
+          ],
+        },
+      ],
+    },
+    events: {},
+    logs: {},
+    resourceUsage: {},
+    nodes: {
+      'first-cluster-worker': {
+        name: 'first-cluster-worker',
+        ready: true,
+        roles: ['worker'],
+        conditions: [
+          { type: 'Ready', status: 'True', reason: 'KubeletReady' },
+          { type: 'MemoryPressure', status: 'False', reason: 'KubeletHasSufficientMemory' },
+          { type: 'DiskPressure', status: 'False', reason: 'KubeletHasNoDiskPressure' },
+          { type: 'PIDPressure', status: 'False', reason: 'KubeletHasSufficientPID' },
+        ],
+        taints: [],
+        nodeInfo: {
+          kubeletVersion: 'v1.31.0',
+          osImage: 'Ubuntu 24.04 LTS',
+          bootID: '7a7dcbf1-3da2-4841-96bd-c28deb37eca6',
+        },
+        capacity: { cpu: '4', memory: '8Gi', pods: '110' },
+        allocatable: { cpu: '4', memory: '8Gi', pods: '110' },
+      },
+    },
+    nodeEvents: {
+      'first-cluster-worker': [], // Expired events (0 count)
+    },
+  },
 };
 
 export class MockDiagnosticBackend implements DiagnosticBackend {
@@ -401,5 +492,56 @@ export class MockDiagnosticBackend implements DiagnosticBackend {
       };
     }
     throw new Error(`Workload '${params.name}' not found in namespace '${params.namespace}'`);
+  }
+
+  async getNodeStatus(params: NodeStatusParams): Promise<unknown> {
+    if (params.nodeName) {
+      const node = this.scenario.nodes?.[params.nodeName];
+      if (node) {
+        return { nodes: [node] };
+      }
+      return {
+        nodes: [
+          {
+            name: params.nodeName,
+            ready: true,
+            roles: ['worker'],
+            conditions: [{ type: 'Ready', status: 'True', reason: 'KubeletReady' }],
+            nodeInfo: { kubeletVersion: 'v1.31.0', bootID: 'mock-boot-id' },
+          },
+        ],
+      };
+    }
+
+    const allNodes = this.scenario.nodes ? Object.values(this.scenario.nodes) : [
+      {
+        name: 'default-worker-1',
+        ready: true,
+        roles: ['worker'],
+        conditions: [{ type: 'Ready', status: 'True', reason: 'KubeletReady' }],
+        nodeInfo: { kubeletVersion: 'v1.31.0', bootID: 'mock-boot-id' },
+      },
+    ];
+    return { nodes: allNodes };
+  }
+
+  async getNodeEvents(params: NodeEventsParams): Promise<unknown> {
+    const nodeEventsMap = this.scenario.nodeEvents || {};
+    let events: any[] = [];
+
+    if (params.nodeName) {
+      events = nodeEventsMap[params.nodeName] || [];
+    } else {
+      events = Object.values(nodeEventsMap).flat();
+    }
+
+    const limit = params.limit ?? 30;
+    return {
+      nodeName: params.nodeName,
+      totalEventsCount: events.length,
+      events: events.slice(0, limit),
+      retentionNote:
+        'Kubernetes API events are retained for 1 hour by default. Older historical events may have expired. If confirming historical node interruptions or reboots is required, inspect host systemd journal logs (e.g. journalctl -u kubelet).',
+    };
   }
 }

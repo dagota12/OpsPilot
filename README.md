@@ -16,13 +16,13 @@ OpsPilot decouples the investigation core from any specific AI provider, present
 - `src/core/policy/`: Safety policy enforcing read-only verification, Zod schema validation, namespace allowlists, and output truncation limits.
 - `src/core/providers/`: Normalized `AIProvider` contract, deterministic `MockAIProvider`, and `GeminiProvider` adapter.
 - `src/providers/gemini.ts`: Google Gemini Adapter using `@google/genai` (maps Gemini function calling to the normalized `AIProvider` contract).
-- `src/diagnostics/`: `DiagnosticBackend` interface, 3 representative mock scenarios (`crashloop-missing-env`, `oom-killed`, `failed-readiness-probe`), and 5 standard read-only diagnostic tools.
+- `src/diagnostics/`: `DiagnosticBackend` interface, 4 representative mock scenarios (`crashloop-missing-env`, `oom-killed`, `failed-readiness-probe`, `node-pressure-reboot`), and 7 standard read-only diagnostic tools (`get_pod_status`, `get_pod_events`, `get_container_logs`, `get_deployment_status`, `get_workload_config`, `get_node_status`, `get_node_events`).
 - `src/core/engine/`: Bounded investigation loop with tool-call budgets, per-tool timeouts, cooperative cancellation, and explicit termination states.
 - `src/cli/`: Command-line interface with structured terminal reporting.
 
 ## Running Tests
 
-Execute the full Vitest suite (21 automated tests covering engine loop, policy rules, timeouts, cancellation, evidence checks, and mocked Gemini adapter):
+Execute the full Vitest suite (41 automated tests covering engine loop, policy rules, timeouts, cancellation, node diagnostics, workload config inspection, and mocked Gemini adapter):
 
 ```bash
 bun run typecheck && bun run test

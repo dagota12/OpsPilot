@@ -33,6 +33,17 @@ export interface WorkloadConfigParams {
   kind?: 'deployment' | 'job' | 'cronjob' | 'statefulset' | 'daemonset';
 }
 
+export interface NodeStatusParams {
+  nodeName?: string;
+  namespace?: string;
+}
+
+export interface NodeEventsParams {
+  nodeName?: string;
+  namespace?: string;
+  limit?: number;
+}
+
 export interface DiagnosticBackend {
   getDeploymentStatus(params: DeploymentStatusParams): Promise<unknown>;
   getPodStatus(params: PodStatusParams): Promise<unknown>;
@@ -40,4 +51,6 @@ export interface DiagnosticBackend {
   getContainerLogs(params: ContainerLogsParams): Promise<unknown>;
   getResourceUsage(params: ResourceUsageParams): Promise<unknown>;
   getWorkloadConfig(params: WorkloadConfigParams): Promise<unknown>;
+  getNodeStatus(params: NodeStatusParams): Promise<unknown>;
+  getNodeEvents(params: NodeEventsParams): Promise<unknown>;
 }

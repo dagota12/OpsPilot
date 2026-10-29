@@ -15,6 +15,9 @@ describe('K8sDiagnosticBackend', () => {
       readNamespacedPod: vi.fn(),
       readNamespacedPodLog: vi.fn(),
       listNamespacedEvent: vi.fn(),
+      listNode: vi.fn(),
+      readNode: vi.fn(),
+      listEventForAllNamespaces: vi.fn(),
     };
 
     mockAppsApi = {
@@ -189,5 +192,55 @@ describe('K8sDiagnosticBackend', () => {
     expect(envVars.find((e: any) => e.name === 'DB_PASSWORD').value).toBe('[REDACTED]');
     expect(envVars.find((e: any) => e.name === 'API_SECRET_KEY').value).toBe('[REDACTED]');
     expect(envVars.find((e: any) => e.name === 'CONFIG_FILE').source).toBe('configMapKeyRef');
+  });
+
+  it('queries node status including conditions, pressure signals, and bootID', async () => {
+    mockCoreApi.readNode.mockResolvedValue({
+      metadata: {
+        name: 'first-cluster-worker',
+        labels: { 'node-role.kubernetes.io/worker': '' },
+      },
+      status: {
+        conditions: [
+          { type: 'Ready', status: 'True', reason: 'KubeletReady' },
+          { type: 'MemoryPressure', status: 'False', reason: 'KubeletHasSufficientMemory' },
+          { type: 'DiskPressure', status: 'False', reason: 'KubeletHasNoDiskPressure' },
+        ],
+        nodeInfo: {
+          kubeletVersion: 'v1.31.0',
+          bootID: 'boot-id-1234',
+          osImage: 'Ubuntu 24.04',
+        },
+      },
+    });
+
+    const result: any = await backend.getNodeStatus({ nodeName: 'first-cluster-worker' });
+    expect(result.nodes.length).toBe(1);
+    expect(result.nodes[0].name).toBe('first-cluster-worker');
+    expect(result.nodes[0].ready).toBe(true);
+    expect(result.nodes[0].roles).toContain('worker');
+    expect(result.nodes[0].conditions.find((c: any) => c.type === 'MemoryPressure').status).toBe('False');
+    expect(result.nodes[0].nodeInfo.bootID).toBe('boot-id-1234');
+  });
+
+  it('queries node events and includes retention disclaimer', async () => {
+    mockCoreApi.listEventForAllNamespaces.mockResolvedValue({
+      items: [
+        {
+          type: 'Warning',
+          reason: 'NodeNotReady',
+          message: 'Node became not ready',
+          involvedObject: { kind: 'Node', name: 'first-cluster-worker' },
+          lastTimestamp: '2026-10-29T05:25:00Z',
+        },
+      ],
+    });
+
+    const result: any = await backend.getNodeEvents({ nodeName: 'first-cluster-worker' });
+    expect(result.nodeName).toBe('first-cluster-worker');
+    expect(result.events.length).toBe(1);
+    expect(result.events[0].reason).toBe('NodeNotReady');
+    expect(result.retentionNote).toContain('1 hour by default');
+    expect(result.retentionNote).toContain('journalctl -u kubelet');
   });
 });

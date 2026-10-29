@@ -59,7 +59,8 @@ export class ToolPolicy {
     const validatedParams = parseResult.data as Record<string, unknown>;
 
     // 4. Namespace authorization check
-    const targetNamespace = (validatedParams['namespace'] as string | undefined) ?? options.investigationNamespace;
+    const explicitNamespace = validatedParams['namespace'] as string | undefined;
+    const targetNamespace = explicitNamespace ?? (toolName.startsWith('get_node_') ? undefined : options.investigationNamespace);
 
     if (options.allowedNamespaces && options.allowedNamespaces.length > 0) {
       if (targetNamespace && !options.allowedNamespaces.includes(targetNamespace)) {

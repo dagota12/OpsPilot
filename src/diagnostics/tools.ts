@@ -134,6 +134,49 @@ export function createStandardTools(backend: DiagnosticBackend): DiagnosticTool[
     },
   };
 
+  const getNodeStatusTool: DiagnosticTool<{ nodeName?: string; namespace?: string }> = {
+    definition: {
+      name: 'get_node_status',
+      description: 'Inspect Kubernetes node readiness, conditions (MemoryPressure, DiskPressure, PIDPressure), taints, and node metadata.',
+      parameters: z.object({
+        nodeName: z.string().optional(),
+        namespace: z.string().optional(),
+      }),
+    },
+    isReadOnly: true,
+    async execute(params, context: ToolExecutionContext): Promise<ToolResult> {
+      const start = Date.now();
+      try {
+        const data = await backend.getNodeStatus(params);
+        return { success: true, data, executionTimeMs: Date.now() - start };
+      } catch (err: any) {
+        return { success: false, error: err.message || String(err), executionTimeMs: Date.now() - start };
+      }
+    },
+  };
+
+  const getNodeEventsTool: DiagnosticTool<{ nodeName?: string; namespace?: string; limit?: number }> = {
+    definition: {
+      name: 'get_node_events',
+      description: 'Retrieve lifecycle and warning events for Kubernetes nodes (reboots, disk/memory pressure, kubelet transitions).',
+      parameters: z.object({
+        nodeName: z.string().optional(),
+        namespace: z.string().optional(),
+        limit: z.number().int().positive().max(100).optional().default(30),
+      }),
+    },
+    isReadOnly: true,
+    async execute(params, context: ToolExecutionContext): Promise<ToolResult> {
+      const start = Date.now();
+      try {
+        const data = await backend.getNodeEvents(params);
+        return { success: true, data, executionTimeMs: Date.now() - start };
+      } catch (err: any) {
+        return { success: false, error: err.message || String(err), executionTimeMs: Date.now() - start };
+      }
+    },
+  };
+
   return [
     getDeploymentStatusTool,
     getPodStatusTool,
@@ -141,5 +184,7 @@ export function createStandardTools(backend: DiagnosticBackend): DiagnosticTool[
     getContainerLogsTool,
     getResourceUsageTool,
     getWorkloadConfigTool,
+    getNodeStatusTool,
+    getNodeEventsTool,
   ];
 }

@@ -12,6 +12,8 @@ import type {
   ContainerLogsParams,
   ResourceUsageParams,
   WorkloadConfigParams,
+  NodeStatusParams,
+  NodeEventsParams,
 } from './interface.js';
 
 export interface K8sBackendOptions {
@@ -398,6 +400,133 @@ export class K8sDiagnosticBackend implements DiagnosticBackend {
       }
     } catch (err: any) {
       throw new Error(`Failed to query workload config '${params.name}' in namespace '${params.namespace}': ${err.message || err}`);
+    }
+  }
+
+  async getNodeStatus(params: NodeStatusParams): Promise<unknown> {
+    try {
+      let rawNodes: any[] = [];
+      if (params.nodeName) {
+        try {
+          const node = await this.coreApi.readNode({ name: params.nodeName });
+          rawNodes = [node];
+        } catch {
+          const list = await this.coreApi.listNode({});
+          rawNodes = (list.items || []).filter((n: any) => n.metadata?.name?.includes(params.nodeName!));
+        }
+      } else {
+        const list = await this.coreApi.listNode({});
+        rawNodes = list.items || [];
+      }
+
+      const nodes = rawNodes.map((n: any) => {
+        const conditions = (n.status?.conditions || []).map((c: any) => ({
+          type: c.type,
+          status: c.status,
+          reason: c.reason,
+          message: c.message,
+          lastTransitionTime: c.lastTransitionTime,
+        }));
+
+        const isReady = conditions.find((c: any) => c.type === 'Ready')?.status === 'True';
+
+        // Extract roles from labels (e.g. node-role.kubernetes.io/control-plane)
+        const labels = n.metadata?.labels || {};
+        const roles = Object.keys(labels)
+          .filter((k) => k.startsWith('node-role.kubernetes.io/'))
+          .map((k) => k.replace('node-role.kubernetes.io/', ''));
+
+        return {
+          name: n.metadata?.name,
+          ready: isReady,
+          roles: roles.length > 0 ? roles : ['worker'],
+          conditions,
+          taints: (n.spec?.taints || []).map((t: any) => ({
+            key: t.key,
+            value: t.value,
+            effect: t.effect,
+          })),
+          addresses: (n.status?.addresses || []).map((a: any) => ({
+            type: a.type,
+            address: a.address,
+          })),
+          nodeInfo: {
+            kubeletVersion: n.status?.nodeInfo?.kubeletVersion,
+            osImage: n.status?.nodeInfo?.osImage,
+            containerRuntimeVersion: n.status?.nodeInfo?.containerRuntimeVersion,
+            kernelVersion: n.status?.nodeInfo?.kernelVersion,
+            architecture: n.status?.nodeInfo?.architecture,
+            bootID: n.status?.nodeInfo?.bootID,
+          },
+          capacity: n.status?.capacity,
+          allocatable: n.status?.allocatable,
+        };
+      });
+
+      return { nodes };
+    } catch (err: any) {
+      throw new Error(`Failed to query node status: ${err.body?.message || err.message || err}`);
+    }
+  }
+
+  async getNodeEvents(params: NodeEventsParams): Promise<unknown> {
+    try {
+      let rawEvents: any[] = [];
+      try {
+        const eventList = await this.coreApi.listEventForAllNamespaces({
+          fieldSelector: 'involvedObject.kind=Node',
+        });
+        rawEvents = eventList.items || [];
+      } catch {
+        // Fallback to cluster default namespace if all-namespaces list is restricted
+        try {
+          const defaultList = await this.coreApi.listNamespacedEvent({ namespace: 'default' });
+          rawEvents = (defaultList.items || []).filter((e: any) => e.involvedObject?.kind === 'Node');
+        } catch {
+          rawEvents = [];
+        }
+      }
+
+      if (params.nodeName) {
+        rawEvents = rawEvents.filter(
+          (e: any) =>
+            e.involvedObject?.name === params.nodeName ||
+            e.involvedObject?.name?.includes(params.nodeName!)
+        );
+      }
+
+      // Sort warnings ahead of normal, then newest timestamp
+      rawEvents.sort((a: any, b: any) => {
+        if (a.type === 'Warning' && b.type !== 'Warning') return -1;
+        if (b.type === 'Warning' && a.type !== 'Warning') return 1;
+        const timeA = new Date(a.lastTimestamp || a.eventTime || a.metadata?.creationTimestamp || 0).getTime();
+        const timeB = new Date(b.lastTimestamp || b.eventTime || b.metadata?.creationTimestamp || 0).getTime();
+        return timeB - timeA;
+      });
+
+      const limit = params.limit ?? 30;
+      const formattedEvents = rawEvents.slice(0, limit).map((e: any) => ({
+        type: e.type,
+        reason: e.reason,
+        message: e.message,
+        count: e.count || 1,
+        firstTimestamp: e.firstTimestamp,
+        lastTimestamp: e.lastTimestamp || e.eventTime,
+        involvedObject: {
+          kind: e.involvedObject?.kind,
+          name: e.involvedObject?.name,
+        },
+      }));
+
+      return {
+        nodeName: params.nodeName,
+        totalEventsCount: rawEvents.length,
+        events: formattedEvents,
+        retentionNote:
+          'Kubernetes API events are retained for 1 hour by default. Older historical events may have expired. If confirming historical node interruptions or reboots is required, inspect host systemd journal logs (e.g. journalctl -u kubelet).',
+      };
+    } catch (err: any) {
+      throw new Error(`Failed to query node events: ${err.body?.message || err.message || err}`);
     }
   }
 }
