@@ -79,29 +79,43 @@ When you have collected sufficient evidence and are ready to conclude the invest
       config.tools = [{ functionDeclarations }];
     }
 
-    try {
-      const response = await this.client.models.generateContent({
-        model: this.model,
-        contents,
-        config,
-      });
+    const maxRetries = 2;
+    let attempt = 0;
 
-      return this.parseGeminiResponse(response);
-    } catch (err: any) {
-      if (options.abortSignal?.aborted || err.name === 'AbortError') {
-        throw new Error('Chat operation was aborted');
-      }
+    while (true) {
+      attempt++;
+      try {
+        const response = await this.client.models.generateContent({
+          model: this.model,
+          contents,
+          config,
+        });
 
-      // Format helpful error messages without leaking secret tokens
-      const message = err.message || String(err);
-      if (message.includes('API_KEY_INVALID') || message.includes('401') || message.includes('403')) {
-        throw new Error('Gemini API authentication failed. Please verify your GEMINI_API_KEY.');
-      }
-      if (message.includes('429') || message.includes('RESOURCE_EXHAUSTED')) {
-        throw new Error('Gemini rate limit exceeded (429). Please retry later or check quota.');
-      }
+        return this.parseGeminiResponse(response);
+      } catch (err: any) {
+        if (options.abortSignal?.aborted || err.name === 'AbortError') {
+          throw new Error('Chat operation was aborted');
+        }
 
-      throw new Error(`Gemini API error: ${message}`);
+        const message = err.message || String(err);
+        const isTransient = message.includes('503') || message.includes('UNAVAILABLE') || message.includes('429');
+
+        if (isTransient && attempt <= maxRetries) {
+          const delayMs = attempt * 1500;
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+          continue;
+        }
+
+        // Format helpful error messages without leaking secret tokens
+        if (message.includes('API_KEY_INVALID') || message.includes('401') || message.includes('403')) {
+          throw new Error('Gemini API authentication failed. Please verify your GEMINI_API_KEY.');
+        }
+        if (message.includes('429') || message.includes('RESOURCE_EXHAUSTED')) {
+          throw new Error('Gemini rate limit exceeded (429). Please retry later or check quota.');
+        }
+
+        throw new Error(`Gemini API error: ${message}`);
+      }
     }
   }
 

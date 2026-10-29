@@ -8,11 +8,16 @@ import type { AIProvider } from '../core/providers/interface.js';
 import { MockDiagnosticBackend, MOCK_SCENARIOS } from '../diagnostics/mock.js';
 import { createStandardTools } from '../diagnostics/tools.js';
 
+import { K8sDiagnosticBackend } from '../diagnostics/k8s.js';
+import type { DiagnosticBackend } from '../diagnostics/interface.js';
+
 export function registerInvestigateCommand(program: Command): void {
   program
     .command('investigate')
     .description('Investigate an infrastructure incident using diagnostic evidence')
     .argument('<prompt>', 'Incident description (e.g. "Why is auth-service restarting?")')
+    .option('-b, --backend <backend>', 'Diagnostic backend (mock | k8s)', 'mock')
+    .option('--context <context>', 'Kubernetes context to target (for k8s backend)')
     .option('-n, --namespace <namespace>', 'Target Kubernetes namespace', 'default')
     .option('-p, --provider <provider>', 'AI provider to use (mock | gemini)', 'mock')
     .option('-m, --model <model>', 'Gemini model name (e.g. gemini-3.5-flash)', 'gemini-3.5-flash')
@@ -22,11 +27,29 @@ export function registerInvestigateCommand(program: Command): void {
       'crashloop-missing-env'
     )
     .option('--max-tools <count>', 'Maximum tool-call budget', '10')
-    .action(async (prompt: string, options: { namespace: string; scenario: string; maxTools: string; provider: string; model: string }) => {
-      const scenarioKey = options.scenario as keyof typeof MOCK_SCENARIOS;
-      if (!MOCK_SCENARIOS[scenarioKey]) {
-        console.error(`Error: Unknown scenario '${options.scenario}'. Available: ${Object.keys(MOCK_SCENARIOS).join(', ')}`);
-        process.exit(1);
+    .action(async (prompt: string, options: { namespace: string; scenario: string; maxTools: string; provider: string; model: string; backend: string; context?: string }) => {
+      let backend: DiagnosticBackend;
+      let backendLabel = 'Mock Cluster Scenario';
+      let contextInfoStr = '';
+
+      if (options.backend === 'k8s') {
+        try {
+          const k8sBackend = new K8sDiagnosticBackend({ context: options.context });
+          const info = k8sBackend.getContextInfo();
+          backend = k8sBackend;
+          backendLabel = 'Live Kubernetes Cluster';
+          contextInfoStr = `Context:      ${info.currentContext} (${info.server})\n`;
+        } catch (err: any) {
+          console.error(`Kubernetes Connection Error: ${err.message}`);
+          process.exit(1);
+        }
+      } else {
+        const scenarioKey = options.scenario as keyof typeof MOCK_SCENARIOS;
+        if (!MOCK_SCENARIOS[scenarioKey]) {
+          console.error(`Error: Unknown scenario '${options.scenario}'. Available: ${Object.keys(MOCK_SCENARIOS).join(', ')}`);
+          process.exit(1);
+        }
+        backend = new MockDiagnosticBackend(scenarioKey);
       }
 
       console.log(`\n======================================================`);
@@ -37,13 +60,18 @@ export function registerInvestigateCommand(program: Command): void {
       if (options.provider === 'gemini') {
         console.log(`Model:        ${options.model}`);
       }
+      console.log(`Backend:      ${backendLabel}`);
+      if (contextInfoStr) {
+        process.stdout.write(contextInfoStr);
+      }
       console.log(`Namespace:    ${options.namespace}`);
-      console.log(`Scenario:     ${scenarioKey}`);
+      if (options.backend === 'mock') {
+        console.log(`Scenario:     ${options.scenario}`);
+      }
       console.log(`Tool Budget:  ${options.maxTools}`);
       console.log(`------------------------------------------------------\n`);
 
       const registry = new ToolRegistry();
-      const backend = new MockDiagnosticBackend(scenarioKey);
       const tools = createStandardTools(backend);
       for (const t of tools) {
         registry.register(t);
@@ -60,6 +88,7 @@ export function registerInvestigateCommand(program: Command): void {
           process.exit(1);
         }
       } else {
+        const scenarioKey = (options.scenario as keyof typeof MOCK_SCENARIOS) || 'crashloop-missing-env';
         provider = new MockAIProvider({ scenarioId: scenarioKey });
       }
 
@@ -69,7 +98,7 @@ export function registerInvestigateCommand(program: Command): void {
       console.log(`[2/3] Agent actively investigating...`);
 
       const run = await engine.investigate(prompt, {
-        allowedNamespaces: [options.namespace, 'staging', 'production'],
+        allowedNamespaces: options.backend === 'k8s' ? undefined : [options.namespace, 'staging', 'production'],
         maxToolCalls: parseInt(options.maxTools, 10),
       });
 
