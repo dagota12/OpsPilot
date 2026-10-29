@@ -47,7 +47,9 @@ export class InvestigationEngine {
     let finalReport: IncidentReport | undefined;
 
     const addAudit = (type: AuditEntry['type'], details: Record<string, unknown>) => {
-      auditLog.push({ timestamp: Date.now(), type, details });
+      const entry: AuditEntry = { timestamp: Date.now(), type, details };
+      auditLog.push(entry);
+      options.onProgress?.(entry);
     };
 
     addAudit('STATUS_CHANGE', { status: 'INVESTIGATING', prompt, options });

@@ -37,4 +37,5 @@ export interface InvestigationOptions {
   allowedNamespaces?: string[];
   maxOutputSizeBytes?: number;
   perToolTimeoutMs?: number;
+  onProgress?: (event: AuditEntry) => void;
 }
