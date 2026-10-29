@@ -57,7 +57,22 @@ npx tsx src/index.ts investigate "Why is payment-gateway 0/1 ready?" --provider 
 Optionally specify a custom model name with `-m` or `--model` (defaults to `gemini-2.5-flash`):
 
 ```bash
-npx tsx src/index.ts investigate "Why is auth-service restarting?" --provider gemini --model gemini-2.5-pro --scenario crashloop-missing-env
+npx tsx src/index.ts investigate "Why is auth-service restarting?" --provider gemini --model gemini-3.5-flash --scenario crashloop-missing-env
+```
+
+## Live Kubernetes Cluster Investigation
+
+To investigate actual workloads running on your local machine (`kind`, `minikube`, `k3s`, Docker Desktop, or any cluster in `~/.kube/config`):
+
+```bash
+# Inspect your default namespace on your active cluster context
+npx tsx src/index.ts investigate "What is the status of pods in default namespace?" --provider gemini --backend k8s --namespace default
+
+# Investigate an application namespace (e.g. zcinema)
+npx tsx src/index.ts investigate "Are there any failing pods or migrations?" --provider gemini --backend k8s --namespace zcinema
+
+# Target a specific cluster context
+npx tsx src/index.ts investigate "Why is my service failing?" --provider gemini --backend k8s --context kind-first-cluster --namespace default
 ```
 
 ## Running the Mock Demo
