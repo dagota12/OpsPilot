@@ -30,6 +30,28 @@ bun run typecheck && bun run test
 
 > **Note:** Tests use mocked API responses. No API key or network access is required to run the test suite.
 
+## Interactive REPL Mode
+
+Launch the interactive investigation assistant without typing complex flags:
+
+```bash
+npx tsx src/index.ts
+# or
+npx tsx src/index.ts interactive
+```
+
+Features:
+- **Interactive Cluster & Namespace Discovery**: Detects active contexts in `~/.kube/config` and lets you pick target namespaces with keyboard arrows.
+- **Continuous Investigation Loop**: Keep asking follow-up questions about workload health without restarting the CLI.
+- **Live Tool Spinners**: Visual progress showing real-time diagnostic calls (`get_pod_status`, `get_container_logs`).
+- **In-Session Slash Commands**:
+  - `/ns <namespace>`: Switch target namespace on the fly.
+  - `/model <model>`: Switch Gemini model.
+  - `/context <context>`: Switch Kubernetes cluster context.
+  - `/status`: Show active session environment.
+  - `/clear`: Clear the screen.
+  - `/exit`: End the session.
+
 ## Gemini Provider Setup
 
 To run live investigations with Google Gemini:
