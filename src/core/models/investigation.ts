@@ -1,4 +1,5 @@
 import type { IncidentReport, Evidence } from './report.js';
+import type { AIMessage } from '../providers/interface.js';
 
 export type InvestigationStatus =
   | 'IDLE'
@@ -28,6 +29,7 @@ export interface InvestigationRun {
   evidence: Evidence[];
   report?: IncidentReport;
   conversationalResponse?: string;
+  messages?: AIMessage[];
   auditLog: AuditEntry[];
 }
 
@@ -38,5 +40,7 @@ export interface InvestigationOptions {
   allowedNamespaces?: string[];
   maxOutputSizeBytes?: number;
   perToolTimeoutMs?: number;
+  conversationHistory?: AIMessage[];
   onProgress?: (event: AuditEntry) => void;
 }
+

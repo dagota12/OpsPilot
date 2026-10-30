@@ -56,6 +56,7 @@ export class InvestigationEngine {
     addAudit('STATUS_CHANGE', { status: 'INVESTIGATING', prompt, options });
 
     const targetNamespace = options.targetNamespace || 'default';
+    const priorHistory = options.conversationHistory || [];
 
     const messages: AIMessage[] = [
       {
@@ -68,9 +69,12 @@ USER INTENT & CONVERSATIONAL HANDLING:
 1. GREETINGS & CASUAL INPUT (e.g. "hi", "hello", "hey", "who are you?", "what can you do?"):
    - If the user is just greeting you or asking about your capabilities, DO NOT execute any diagnostic tools and DO NOT generate an incident report.
    - Respond naturally, helpfully, and conversationally as OpsPilot. Greet the user, mention that you are connected to the "${targetNamespace}" namespace, and ask what workload, service, or issue they would like to check or investigate.
-2. CONCEPTUAL & EXPLANATORY QUESTIONS (e.g. "what is exit code 255?", "how do Kubernetes readiness probes work?", "what does CrashLoopBackOff mean?"):
+2. MULTI-TURN CONTINUITY:
+   - If this is a follow-up turn in an ongoing conversation, DO NOT repeat introductory greetings or state 'Hello! I am OpsPilot...' on every turn.
+   - Maintain conversational context and continuity. When the user asks follow-up questions, refers to previous findings, or says 'yes the first one' or 'check that pod', resolve the reference using the prior messages and take the requested action directly.
+3. CONCEPTUAL & EXPLANATORY QUESTIONS (e.g. "what is exit code 255?", "how do Kubernetes readiness probes work?", "what does CrashLoopBackOff mean?"):
    - Answer the question directly, clearly, and concisely without executing diagnostic tools or generating an incident report, unless the user specifically asks to check their cluster.
-3. INCIDENT INVESTIGATIONS & HEALTH CHECKS (e.g. "why is auth-service restarting?", "check pod health in zcinema", "are all replicas healthy?", "is anything failing?"):
+4. INCIDENT INVESTIGATIONS & HEALTH CHECKS (e.g. "why is auth-service restarting?", "check pod health in zcinema", "are all replicas healthy?", "is anything failing?", "yes the first one"):
    - Follow the ADAPTIVE INVESTIGATION RULES below. Execute read-only diagnostic tools adaptively, collect evidence, and conclude with an Incident Report.
 
 ADAPTIVE INVESTIGATION RULES:
@@ -88,6 +92,7 @@ ADAPTIVE INVESTIGATION RULES:
 5. Separate confirmed observations from hypotheses and unknown areas. Explicitly record important diagnostic gaps (e.g. logs truncated or unavailable, node events expired).
 6. Base confidence directly on evidence: HIGH only if the root cause is confirmed by tool evidence; MEDIUM or LOW if critical diagnostic leads remain unverified.`,
       },
+      ...priorHistory.filter((m) => m.role !== 'system'),
       {
         role: 'user',
         content: prompt,
@@ -125,6 +130,10 @@ ADAPTIVE INVESTIGATION RULES:
           finalReport = this.validateReportEvidence(aiResponse.report, evidenceList, auditLog);
           status = 'COMPLETED';
           terminationReason = 'Investigation concluded with final incident report';
+          messages.push({
+            role: 'assistant',
+            content: aiResponse.content || `Investigation completed: ${finalReport.summary}`,
+          });
           addAudit('STATUS_CHANGE', { status, terminationReason, reportId: finalReport.id });
           break;
         }
@@ -149,6 +158,12 @@ ADAPTIVE INVESTIGATION RULES:
             // No tools were ever called: this is a direct conversational or explanatory response!
             terminationReason = 'Direct response provided without requiring diagnostic tools';
             conversationalResponse = aiResponse.content;
+          }
+          if (aiResponse.content) {
+            messages.push({
+              role: 'assistant',
+              content: aiResponse.content,
+            });
           }
           addAudit('STATUS_CHANGE', { status, terminationReason });
           break;
@@ -322,6 +337,7 @@ ADAPTIVE INVESTIGATION RULES:
       evidence: evidenceList,
       report: finalReport,
       conversationalResponse,
+      messages: messages.filter((m) => m.role !== 'system'),
       auditLog,
     };
   }

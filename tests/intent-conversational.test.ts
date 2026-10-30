@@ -63,4 +63,29 @@ describe('User Intent & Conversational Handling', () => {
     expect(run.conversationalResponse).toBeUndefined();
     expect(run.report?.summary).toContain('JWT_SECRET_KEY');
   });
+
+  it('maintains multi-turn conversation history across follow-up turns', async () => {
+    const engine = new InvestigationEngine({ provider, registry, policy });
+
+    // Turn 1: initial question
+    const turn1 = await engine.investigate('hi');
+    expect(turn1.messages).toBeDefined();
+    expect(turn1.messages?.length).toBeGreaterThan(0);
+
+    // Turn 2: follow-up referencing turn 1
+    provider.setScriptedResponses([
+      {
+        content: 'I remember our conversation. How can I help you inspect your Kubernetes workloads?',
+      },
+    ]);
+
+    const turn2 = await engine.investigate('Can you help me?', {
+      conversationHistory: turn1.messages,
+    });
+
+    expect(turn2.status).toBe('COMPLETED');
+    expect(turn2.conversationalResponse).toContain('I remember our conversation');
+    // turn2 messages should contain turn1 messages + turn2 messages
+    expect(turn2.messages?.length).toBeGreaterThan(turn1.messages!.length);
+  });
 });

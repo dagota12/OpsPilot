@@ -14,7 +14,8 @@ import {
 } from '../diagnostics/mock.js';
 import { K8sDiagnosticBackend } from '../diagnostics/k8s.js';
 import { createStandardTools } from '../diagnostics/tools.js';
-import type { AIProvider } from '../core/providers/interface.js';
+import { SessionStore } from '../storage/session-store.js';
+import type { AIProvider, AIMessage } from '../core/providers/interface.js';
 import type { DiagnosticBackend } from '../diagnostics/interface.js';
 import type { IncidentReport } from '../core/models/report.js';
 import type { InvestigationRun } from '../core/models/investigation.js';
@@ -27,6 +28,9 @@ interface SessionState {
   providerType: 'gemini' | 'mock';
   model: string;
   toolBudget: number;
+  sessionId: string;
+  store: SessionStore;
+  messages: AIMessage[];
 }
 
 export function registerInteractiveCommand(program: Command): void {
@@ -257,6 +261,16 @@ export async function runInteractiveSession(initialOptions: {
     selectedModel = modelChoice as string;
   }
 
+  const store = new SessionStore();
+  await store.init();
+
+  const currentSession = await store.createSession({
+    namespace: selectedNamespace,
+    context: selectedContext,
+    provider: providerType,
+    model: selectedModel,
+  });
+
   const session: SessionState = {
     backendType,
     context: selectedContext,
@@ -265,6 +279,9 @@ export async function runInteractiveSession(initialOptions: {
     providerType,
     model: selectedModel,
     toolBudget: 10,
+    sessionId: currentSession.id,
+    store,
+    messages: [],
   };
 
   printSessionHeader(session);
@@ -278,6 +295,7 @@ export async function runInteractiveSession(initialOptions: {
     });
 
     if (p.isCancel(userInput) || userInput.trim() === 'exit' || userInput.trim() === 'quit') {
+      session.store.close();
       p.outro(pc.green('OpsPilot session concluded. Cluster systems monitored! 🚀'));
       break;
     }
@@ -287,8 +305,9 @@ export async function runInteractiveSession(initialOptions: {
     // Check slash commands or 'help'
     if (trimmed.startsWith('/') || trimmed.toLowerCase() === 'help' || trimmed === '?') {
       const slashCmd = trimmed.startsWith('/') ? trimmed : '/help';
-      const handled = handleSlashCommand(slashCmd, session);
+      const handled = await handleSlashCommand(slashCmd, session);
       if (handled === 'exit') {
+        session.store.close();
         p.outro(pc.green('OpsPilot session concluded. Cluster systems monitored! 🚀'));
         break;
       }
@@ -300,7 +319,10 @@ export async function runInteractiveSession(initialOptions: {
   }
 }
 
-function handleSlashCommand(commandStr: string, session: SessionState): 'handled' | 'exit' {
+async function handleSlashCommand(
+  commandStr: string,
+  session: SessionState
+): Promise<'handled' | 'exit'> {
   const [cmd, ...args] = commandStr.split(' ');
   if (!cmd) return 'handled';
 
@@ -312,19 +334,84 @@ function handleSlashCommand(commandStr: string, session: SessionState): 'handled
     case '/help':
       p.note(
         `Available Commands:
+  ${pc.bold('/new')}             Start a fresh investigation session (clears conversation context)
+  ${pc.bold('/history')}         List recent investigation sessions
+  ${pc.bold('/resume <id>')}     Resume a previous session and restore its conversation history
+  ${pc.bold('/session')}         Display active session details & history count
   ${pc.bold('/ns <name>')}       Change active target namespace (e.g. /ns zcinema)
   ${pc.bold('/model <name>')}    Switch Gemini model (e.g. /model gemini-3.5-flash-lite)
   ${pc.bold('/context <name>')}  Switch Kubernetes cluster context
-  ${pc.bold('/status')}          Display current active session settings
   ${pc.bold('/clear')}           Clear the terminal screen
   ${pc.bold('/exit')}            Exit the interactive session`,
         'Interactive REPL Commands'
       );
       return 'handled';
 
+    case '/new':
+    case '/reset': {
+      const newSession = await session.store.createSession({
+        namespace: session.namespace,
+        context: session.context,
+        provider: session.providerType,
+        model: session.model,
+      });
+      session.sessionId = newSession.id;
+      session.messages = [];
+      p.log.success(
+        pc.green(`Started fresh session: ${pc.bold(newSession.id)} (in-memory context reset)`)
+      );
+      return 'handled';
+    }
+
+    case '/history': {
+      const sessions = await session.store.listSessions(15);
+      if (sessions.length === 0) {
+        p.log.info('No previous sessions found in local SQLite database.');
+        return 'handled';
+      }
+      const lines = sessions.map((s) => {
+        const isActive = s.id === session.sessionId;
+        const marker = isActive ? pc.green('● [Active]') : pc.dim('○');
+        const dateStr = new Date(s.updatedAt).toLocaleString();
+        return `${marker} ${pc.bold(s.id)} - ${pc.cyan(s.title)}\n    ${pc.dim(`Namespace: ${s.namespace} | Model: ${s.model} | Last active: ${dateStr}`)}`;
+      });
+      p.note(lines.join('\n\n'), 'Investigation Session History');
+      return 'handled';
+    }
+
+    case '/resume': {
+      const targetId = args[0]?.trim();
+      if (!targetId) {
+        p.log.warn('Usage: /resume <sessionId>');
+        return 'handled';
+      }
+      const targetSession = await session.store.getSession(targetId);
+      if (!targetSession) {
+        p.log.error(`Session not found: ${targetId}. Use /history to see available sessions.`);
+        return 'handled';
+      }
+      session.sessionId = targetSession.id;
+      session.namespace = targetSession.namespace;
+      if (targetSession.context) session.context = targetSession.context;
+      session.model = targetSession.model;
+      session.messages = await session.store.getMessages(targetSession.id);
+      p.log.success(
+        pc.green(
+          `Resumed session ${pc.bold(targetSession.id)} ("${targetSession.title}") with ${session.messages.length} messages loaded.`
+        )
+      );
+      return 'handled';
+    }
+
+    case '/session':
+    case '/status':
+      printSessionHeader(session);
+      return 'handled';
+
     case '/ns':
       if (args[0]) {
         session.namespace = args[0];
+        await session.store.updateSession(session.sessionId, { namespace: session.namespace });
         p.log.success(pc.green(`Target namespace switched to: ${pc.bold(session.namespace)}`));
       } else {
         p.log.warn('Usage: /ns <namespace_name>');
@@ -334,6 +421,7 @@ function handleSlashCommand(commandStr: string, session: SessionState): 'handled
     case '/model':
       if (args[0]) {
         session.model = args[0];
+        await session.store.updateSession(session.sessionId, { model: session.model });
         p.log.success(pc.green(`Model switched to: ${pc.bold(session.model)}`));
       } else {
         p.log.warn('Usage: /model <model_name>');
@@ -343,14 +431,11 @@ function handleSlashCommand(commandStr: string, session: SessionState): 'handled
     case '/context':
       if (args[0]) {
         session.context = args[0];
+        await session.store.updateSession(session.sessionId, { context: session.context });
         p.log.success(pc.green(`Kubernetes context switched to: ${pc.bold(session.context)}`));
       } else {
         p.log.warn('Usage: /context <context_name>');
       }
-      return 'handled';
-
-    case '/status':
-      printSessionHeader(session);
       return 'handled';
 
     case '/clear':
@@ -375,8 +460,10 @@ function printSessionHeader(session: SessionState): void {
       ? `Gemini (${pc.yellow(session.model)})`
       : 'Mock Provider';
 
+  const historyDesc = `${session.messages.length} messages in context`;
+
   p.note(
-    `Backend:  ${backendDesc}\nProvider: ${providerDesc}\nBudget:   ${session.toolBudget} diagnostic tool calls\nCommands: Type ${pc.bold('/help')} for options, ${pc.bold('exit')} to quit`,
+    `Session:  ${pc.bold(session.sessionId)} (${historyDesc})\nBackend:  ${backendDesc}\nProvider: ${providerDesc}\nBudget:   ${session.toolBudget} diagnostic tool calls\nCommands: Type ${pc.bold('/help')} for options, ${pc.bold('exit')} to quit`,
     'Active Session Environment'
   );
 }
@@ -431,6 +518,7 @@ async function executeInteractiveInvestigation(
       maxToolCalls: session.toolBudget,
       targetNamespace: session.namespace,
       allowedNamespaces: session.backendType === 'k8s' ? undefined : ['default'],
+      conversationHistory: session.messages,
       onProgress: (entry) => {
         if (entry.type === 'TOOL_REQUEST') {
           const name = String(entry.details['name'] || 'tool');
@@ -462,7 +550,27 @@ async function executeInteractiveInvestigation(
         : pc.yellow(`Investigation finished with status: ${run.status}`)
     );
 
-    // 5. Render Structured Report or Conversational Response
+    // 5. Update session messages & persistence
+    if (run.messages && run.messages.length > 0) {
+      const previousCount = session.messages.length;
+      session.messages = run.messages;
+      const newMessages = session.messages.slice(previousCount);
+      if (newMessages.length > 0) {
+        await session.store.saveMessages(session.sessionId, newMessages);
+      }
+    }
+
+    // Persist investigation run
+    await session.store.saveInvestigation(run, session.sessionId);
+
+    // Update session title on initial turn if title is default
+    const currentSession = await session.store.getSession(session.sessionId);
+    if (currentSession && currentSession.title.startsWith('Investigation in ')) {
+      const shortTitle = prompt.length > 40 ? prompt.substring(0, 37) + '...' : prompt;
+      await session.store.updateSessionTitle(session.sessionId, shortTitle);
+    }
+
+    // 6. Render Structured Report or Conversational Response
     if (run.conversationalResponse) {
       p.note(run.conversationalResponse, 'OpsPilot');
     } else if (run.report) {
