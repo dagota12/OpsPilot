@@ -10,7 +10,9 @@
     "typecheck": "tsc --noEmit",
     "start": "tsx src/index.ts",
     "dev": "tsx src/index.ts",
-    "demo": "tsx src/demo.ts"
+    "demo": "tsx src/demo.ts",
+    "build:binary": "bun build --compile --minify ./src/index.ts --outfile dist/opspilot",
+    "build:all": "bun build --compile --minify --target=bun-linux-x64 ./src/index.ts --outfile dist/opspilot-linux-x64 && bun build --compile --minify --target=bun-darwin-arm64 ./src/index.ts --outfile dist/opspilot-darwin-arm64 && bun build --compile --minify --target=bun-darwin-x64 ./src/index.ts --outfile dist/opspilot-darwin-x64 && bun build --compile --minify --target=bun-windows-x64 ./src/index.ts --outfile dist/opspilot-windows-x64.exe"
   },
   "engines": {
     "node": ">=20.0.0"

@@ -3,6 +3,7 @@ import {
   CoreV1Api,
   AppsV1Api,
   BatchV1Api,
+  ResponseContext,
 } from '@kubernetes/client-node';
 import type {
   DiagnosticBackend,
@@ -17,6 +18,48 @@ import type {
   ServiceStatusParams,
   EndpointsStatusParams,
 } from './interface.js';
+
+class BunObservable {
+  constructor(private promise: Promise<any>) {}
+  toPromise() {
+    return this.promise;
+  }
+  pipe(callback: (v: any) => any) {
+    return new BunObservable(this.promise.then(callback));
+  }
+}
+
+class BunHttpLibrary {
+  constructor(private opts: any) {}
+
+  send(request: any) {
+    const promise = fetch(request.getUrl(), {
+      method: request.getHttpMethod().toString(),
+      body: request.getBody(),
+      headers: request.getHeaders(),
+      signal: request.getSignal(),
+      tls: {
+        ca: this.opts.ca,
+        cert: this.opts.cert,
+        key: this.opts.key,
+        rejectUnauthorized: this.opts.rejectUnauthorized !== false,
+      },
+    }).then(async (resp) => {
+      const headers: Record<string, string> = {};
+      resp.headers.forEach((v, k) => {
+        headers[k] = v;
+      });
+      const body = {
+        text: () => resp.text(),
+        binary: () => resp.arrayBuffer().then((b) => Buffer.from(b)),
+        stream: () => resp.body,
+      };
+      return new ResponseContext(resp.status, headers, body);
+    });
+
+    return new BunObservable(promise);
+  }
+}
 
 export interface K8sBackendOptions {
   kubeConfig?: KubeConfig;
@@ -48,6 +91,26 @@ export class K8sDiagnosticBackend implements DiagnosticBackend {
     this.coreApi = this.kc.makeApiClient(CoreV1Api);
     this.appsApi = this.kc.makeApiClient(AppsV1Api);
     this.batchApi = this.kc.makeApiClient(BatchV1Api);
+
+    // If running under Bun, wire native TLS client certificates
+    if (typeof (process.versions as any)?.bun !== 'undefined') {
+      try {
+        const opts: any = {};
+        this.kc.applyToHTTPSOptions(opts);
+        const bunHttp = new BunHttpLibrary(opts);
+        if ((this.coreApi as any)?.api?.configuration) {
+          (this.coreApi as any).api.configuration.httpApi = bunHttp;
+        }
+        if ((this.appsApi as any)?.api?.configuration) {
+          (this.appsApi as any).api.configuration.httpApi = bunHttp;
+        }
+        if ((this.batchApi as any)?.api?.configuration) {
+          (this.batchApi as any).api.configuration.httpApi = bunHttp;
+        }
+      } catch {
+        // Fallback to default httpApi
+      }
+    }
   }
 
   getContextInfo(): { currentContext: string; clusterName: string; server: string } {
