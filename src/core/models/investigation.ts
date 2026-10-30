@@ -27,6 +27,7 @@ export interface InvestigationRun {
   toolCallCount: number;
   evidence: Evidence[];
   report?: IncidentReport;
+  conversationalResponse?: string;
   auditLog: AuditEntry[];
 }
 

@@ -117,8 +117,13 @@ export function registerInvestigateCommand(program: Command): void {
         }
       }
 
-      // Print final report
-      if (run.report) {
+      // Print conversational response or final report
+      if (run.conversationalResponse) {
+        console.log(`\n======================================================`);
+        console.log(`  OpsPilot`);
+        console.log(`======================================================`);
+        console.log(`\n${run.conversationalResponse}\n`);
+      } else if (run.report) {
         console.log(`\n======================================================`);
         console.log(`  INCIDENT REPORT`);
         console.log(`======================================================`);

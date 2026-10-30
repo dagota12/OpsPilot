@@ -45,6 +45,7 @@ export class InvestigationEngine {
     let status: InvestigationStatus = 'INVESTIGATING';
     let terminationReason: string | undefined;
     let finalReport: IncidentReport | undefined;
+    let conversationalResponse: string | undefined;
 
     const addAudit = (type: AuditEntry['type'], details: Record<string, unknown>) => {
       const entry: AuditEntry = { timestamp: Date.now(), type, details };
@@ -62,6 +63,15 @@ export class InvestigationEngine {
         content: `You are OpsPilot, an expert AI DevOps incident investigator.
 Your goal is to investigate infrastructure failures using read-only diagnostic tools through bounded, adaptive exploration.
 Target Kubernetes Namespace: "${targetNamespace}". Unless explicitly instructed otherwise by the user, you MUST pass namespace="${targetNamespace}" in your diagnostic tool calls.
+
+USER INTENT & CONVERSATIONAL HANDLING:
+1. GREETINGS & CASUAL INPUT (e.g. "hi", "hello", "hey", "who are you?", "what can you do?"):
+   - If the user is just greeting you or asking about your capabilities, DO NOT execute any diagnostic tools and DO NOT generate an incident report.
+   - Respond naturally, helpfully, and conversationally as OpsPilot. Greet the user, mention that you are connected to the "${targetNamespace}" namespace, and ask what workload, service, or issue they would like to check or investigate.
+2. CONCEPTUAL & EXPLANATORY QUESTIONS (e.g. "what is exit code 255?", "how do Kubernetes readiness probes work?", "what does CrashLoopBackOff mean?"):
+   - Answer the question directly, clearly, and concisely without executing diagnostic tools or generating an incident report, unless the user specifically asks to check their cluster.
+3. INCIDENT INVESTIGATIONS & HEALTH CHECKS (e.g. "why is auth-service restarting?", "check pod health in zcinema", "are all replicas healthy?", "is anything failing?"):
+   - Follow the ADAPTIVE INVESTIGATION RULES below. Execute read-only diagnostic tools adaptively, collect evidence, and conclude with an Incident Report.
 
 ADAPTIVE INVESTIGATION RULES:
 1. Dynamically select follow-up tools based on the actual findings of previous tool calls. Do not follow a rigid sequence.
@@ -122,17 +132,23 @@ ADAPTIVE INVESTIGATION RULES:
         // If no tool calls requested
         if (!aiResponse.toolCalls || aiResponse.toolCalls.length === 0) {
           status = 'COMPLETED';
-          terminationReason = 'Model completed response without requesting further tools';
-          // Synthesize minimal report if none provided
-          if (!finalReport && aiResponse.content) {
-            finalReport = {
-              id: `rep_${Date.now()}`,
-              summary: aiResponse.content,
-              observedFacts: [],
-              hypotheses: [],
-              recommendations: [],
-              confidence: 'medium',
-            };
+          if (evidenceList.length > 0) {
+            // Model executed diagnostic tools, then finished with text
+            terminationReason = 'Model completed response without requesting further tools';
+            if (!finalReport && aiResponse.content) {
+              finalReport = {
+                id: `rep_${Date.now()}`,
+                summary: aiResponse.content,
+                observedFacts: [],
+                hypotheses: [],
+                recommendations: [],
+                confidence: 'medium',
+              };
+            }
+          } else {
+            // No tools were ever called: this is a direct conversational or explanatory response!
+            terminationReason = 'Direct response provided without requiring diagnostic tools';
+            conversationalResponse = aiResponse.content;
           }
           addAudit('STATUS_CHANGE', { status, terminationReason });
           break;
@@ -305,6 +321,7 @@ ADAPTIVE INVESTIGATION RULES:
       toolCallCount,
       evidence: evidenceList,
       report: finalReport,
+      conversationalResponse,
       auditLog,
     };
   }

@@ -284,9 +284,10 @@ export async function runInteractiveSession(initialOptions: {
 
     const trimmed = userInput.trim();
 
-    // Check slash commands
-    if (trimmed.startsWith('/')) {
-      const handled = handleSlashCommand(trimmed, session);
+    // Check slash commands or 'help'
+    if (trimmed.startsWith('/') || trimmed.toLowerCase() === 'help' || trimmed === '?') {
+      const slashCmd = trimmed.startsWith('/') ? trimmed : '/help';
+      const handled = handleSlashCommand(slashCmd, session);
       if (handled === 'exit') {
         p.outro(pc.green('OpsPilot session concluded. Cluster systems monitored! 🚀'));
         break;
@@ -454,13 +455,17 @@ async function executeInteractiveInvestigation(
     });
 
     s.stop(
-      run.status === 'COMPLETED'
+      run.conversationalResponse
+        ? pc.green('OpsPilot ready')
+        : run.status === 'COMPLETED'
         ? pc.green(`Investigation concluded (${run.toolCallCount} tool calls executed)`)
         : pc.yellow(`Investigation finished with status: ${run.status}`)
     );
 
-    // 5. Render Structured Report
-    if (run.report) {
+    // 5. Render Structured Report or Conversational Response
+    if (run.conversationalResponse) {
+      p.note(run.conversationalResponse, 'OpsPilot');
+    } else if (run.report) {
       renderIncidentReport(run.report, toolExecutions);
     } else {
       p.log.warn(

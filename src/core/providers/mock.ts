@@ -71,6 +71,16 @@ export class MockAIProvider implements AIProvider {
 
   private handleScenario(scenario: string, messages: AIMessage[]): AIResponse {
     const toolMessages = messages.filter((m) => m.role === 'tool');
+    const userMsg = messages.filter((m) => m.role === 'user').pop()?.content.trim().toLowerCase() || '';
+    const isGreeting =
+      /^(hi|hello|hey|greetings|howdy|good\s+(morning|afternoon|evening)|who\s+are\s+you|what\s+can\s+you\s+do)\b/i.test(userMsg) &&
+      !/(investigate|check|restart|fail|status|error|pod|deploy|node|service|endpoint|issue|why|what)/i.test(userMsg);
+
+    if (isGreeting && toolMessages.length === 0) {
+      return {
+        content: `Hello! I'm OpsPilot, your AI DevOps incident investigator. I'm ready to inspect workloads, pods, services, and nodes in your cluster. What would you like to investigate?`,
+      };
+    }
 
     if (scenario === 'crashloop-missing-env') {
       if (toolMessages.length === 0) {
