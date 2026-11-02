@@ -111,13 +111,19 @@ describe('SessionStore (SQLite Session & History Persistence)', () => {
     expect(loaded[0]?.role).toBe('user');
     expect(loaded[0]?.content).toBe('Why is api pod restarting?');
 
-    expect(loaded[1]?.role).toBe('assistant');
-    expect(loaded[1]?.toolCalls).toHaveLength(1);
-    expect(loaded[1]?.toolCalls?.[0]?.name).toBe('get_pod_status');
+    const asstMsg = loaded[1];
+    expect(asstMsg?.role).toBe('assistant');
+    if (asstMsg?.role === 'assistant') {
+      expect(asstMsg.toolCalls).toHaveLength(1);
+      expect(asstMsg.toolCalls?.[0]?.name).toBe('get_pod_status');
+    }
 
-    expect(loaded[2]?.role).toBe('tool');
-    expect(loaded[2]?.toolCallId).toBe('call_1');
-    expect(loaded[2]?.toolName).toBe('get_pod_status');
+    const toolMsg = loaded[2];
+    expect(toolMsg?.role).toBe('tool');
+    if (toolMsg?.role === 'tool') {
+      expect(toolMsg.toolCallId).toBe('call_1');
+      expect(toolMsg.toolName).toBe('get_pod_status');
+    }
 
     expect(loaded[3]?.role).toBe('assistant');
     expect(loaded[3]?.content).toContain('The api pod restarted 3 times');
